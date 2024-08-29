@@ -4,7 +4,7 @@ from w3m.w3m import fetch_with_w3m
 from echo.echoing import echoing
 from duck.ducknews import search_news, search_text, search_maps, search_translate
 
-app = FastAPI()
+app = FastAPI(root_path="/api")
 
 @app.get("/echo")
 def echo(text: str = Query(default="Hello, World!", min_length=1)):
