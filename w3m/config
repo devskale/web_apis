@@ -1,0 +1,16 @@
+# w3m/config
+
+# Use colors in the output
+color 1
+
+# Display images if supported (set to 0 if you want to disable)
+display_image 0
+
+# Set the default language for web pages
+accept_language en
+
+# Disable cookies (set to 1 if you want to enable)
+use_cookie 1
+
+# Set user agent string
+user_agent "w3m/0.5.3 (custom config)"
