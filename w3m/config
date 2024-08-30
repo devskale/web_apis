@@ -9,8 +9,9 @@ display_image 0
 # Set the default language for web pages
 accept_language en
 
-# Disable cookies (set to 1 if you want to enable)
+# Cookies (set to 1 if you want to enable)
 use_cookie 1
+accept_cookie 1
 
 # Set user agent string
 user_agent "w3m/0.5.3 (custom config)"
