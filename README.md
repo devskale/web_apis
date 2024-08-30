@@ -22,4 +22,13 @@ sudo nano /etc/nginx/sites-available/fastapi
 sudo ln -s /etc/nginx/sites-available/fastapi /etc/nginx/sites-enabled/
 sudo systemctl restart nginx
 ```
+after updating api sources
 
+sudo systemctl status fastapi
+
+```
+sudo systemctl restart fastapi
+```
+```
+sudo nano /etc/systemd/system/fastapi.service
+```
