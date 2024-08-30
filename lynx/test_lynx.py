@@ -1,7 +1,7 @@
-from w3m import fetch_with_w3m
+from lynx import fetch_with_lynx
 from unittest import mock
 
-def from_start_to_end(text, start_str, end_str)
+def from_start_to_end(text, start_str, end_str):
     start = text.find(start_str)
     end = text.find(end_str)
     return text[start:end]

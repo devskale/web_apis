@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Query
 from typing import Optional
 from w3m.w3m import fetch_with_w3m
 from echo.echoing import echoing
+from goog.goog import goog_search
 from duck.ducknews import search_news, search_text, search_maps, search_translate
 
 app = FastAPI(root_path="/api")
@@ -46,6 +47,13 @@ def get_translation(topic: str, to_language: str):
     results = search_translate(topic, to_language)
     if not results:
         raise HTTPException(status_code=404, detail="No translation found.")
+    return {"results": results}
+
+@app.get("/goog")
+def get_translation(query: str, num_results: int = 4):
+    results = goog_search(query, num_results)
+    if not results:
+        raise HTTPException(status_code=404, detail="No results found.")
     return {"results": results}
 
 if __name__ == "__main__":
