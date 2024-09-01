@@ -13,5 +13,8 @@ accept_language en
 use_cookie 1
 accept_cookie 1
 
+display_link_number 1
+display_link 0
+
 # Set user agent string
 user_agent "w3m/0.5.3 (custom config)"

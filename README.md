@@ -83,3 +83,5 @@ options:
     -reqlog          write request logfile
     -debug           DO NOT USE
 ```
+
+a good w3m config file link, https://a3nm.net/git/myconfig/file/w3m.html

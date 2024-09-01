@@ -4,12 +4,13 @@ import os
 # Path to the custom lynx config file
 lynx_config_path = os.path.join(os.path.dirname(__file__), 'lynx.cfg')
 
-def fetch_with_lynx(url: str) -> str:
+def lynx_url(url: str) -> str:
     """Fetch a webpage using Lynx with a custom config and return the text output."""
     try:
         # Run the Lynx command with the custom config file and a 15-second timeout
         result = subprocess.run(
-            ['/usr/bin/lynx', '-cfg=', lynx_config_path, '-dump', url],
+            ['lynx', url, '-dump', '-cfg=', lynx_config_path, '--display_charset=utf-8', '-accept_all_cookies'],
+#            ['lynx',  url, '-dump', '--display_charset=utf-8'],
             capture_output=True,
             text=True,
             check=True,
