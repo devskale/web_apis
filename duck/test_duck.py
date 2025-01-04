@@ -1,4 +1,6 @@
 from ducknews import search_news, search_text, search_maps, search_translate
+from duckduckgo_search import DDGS as ddgs
+
 
 def test_search_news():
     print("Testing search_news...")
@@ -25,7 +27,9 @@ def test_search_translate():
     print("\n")
 
 if __name__ == "__main__":
-    test_search_news()
+    reply = ddgs().text("OpenAI Strawberry", max_results=3)
+    print(reply)
+    #test_search_news()
 #    test_search_text()
 #    test_search_maps()
 #    test_search_translate()

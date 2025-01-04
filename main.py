@@ -39,8 +39,8 @@ def get_news(topic: str):
     return {"results": results}
 
 @app.get("/duck/text")
-def get_text(topic: str):
-    results = search_text(topic)
+def get_text(text: str):
+    results = search_text(text)
     if not results:
         raise HTTPException(status_code=404, detail="No text found.")
     return {"results": results}
@@ -53,8 +53,8 @@ def get_maps(topic: str, place: Optional[str] = None):
     return {"results": results}
 
 @app.get("/duck/translate")
-def get_translation(topic: str, to_language: str):
-    results = search_translate(topic, to_language)
+def get_duck_translation(text: str, to_language: str):
+    results = search_translate(text, to_language)
     if not results:
         raise HTTPException(status_code=404, detail="No translation found.")
     return {"results": results}
@@ -67,7 +67,7 @@ def get_translation(query: str, num_results: int = 10):
     return {"results": results}
 
 @app.get("/lynx")
-def get_translation(url: str):
+def get_lynx_url(url: str):
     results = lynx_url(url)
     if not results:
         raise HTTPException(status_code=404, detail="No results found.")
