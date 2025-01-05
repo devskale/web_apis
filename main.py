@@ -16,7 +16,7 @@ def echo(text: str = Query(default="Hello, World!", min_length=1)):
 @app.get("/w3m")
 def w3m_fetch(url: str):
     try:
-        content = fetch_with_w3m(url)
+        content = fetch_with_w3m(url, links=False)
         return {"content": content}
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))

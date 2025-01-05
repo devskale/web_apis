@@ -22,7 +22,7 @@ def build_goog_search_url(query: str, num_results: int, domain:str='at') -> str:
     return f"https://www.google.{domain}/search?q={encoded_query}&num={num_results}"
 
 
-def fetch_with_w3m(url: str) -> str:
+def fetch_with_w3m(url: str, links = True) -> str:
     """Fetch a webpage using w3m with a custom config and return the text output."""
     try:
 #        print("Executing w3m with the following command:")
@@ -32,18 +32,27 @@ def fetch_with_w3m(url: str) -> str:
         # on macos w3m is w3m
 
         # Run the w3m command with the custom config file and a 15-second timeout
-        result = subprocess.run(
-            [w3m_path, '-config', w3m_config_path, '-dump', url],
-#             ['w3m', '-config', w3m_config_path, '-o', 'display_link_number=1', url, '-dump'],
-#            ['w3m', '-config', w3m_config_path, '-dump', url],
-#            ['/usr/bin/w3m', '-dump', url],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=15  # Set timeout to 15 seconds
-        )
-
+        if links == True:
+            result = subprocess.run(
+ #               [w3m_path, '-config', w3m_config_path, '-dump', url],
+                ['w3m', '-config', w3m_config_path, '-o', 'display_link_number=1', url, '-dump'],
+    #            ['w3m', '-config', w3m_config_path, '-dump', url],
+    #            ['/usr/bin/w3m', '-dump', url],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=15  # Set timeout to 15 seconds
+            )
+        else:
+            result = subprocess.run(
+                ['w3m', '-config', w3m_config_path, '-o', 'display_link_number=0', url, '-dump'],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=15  # Set timeout to 15 seconds 
+            )
         return result.stdout
+    
     except subprocess.TimeoutExpired:
         raise RuntimeError("The w3m request timed out after 15 seconds.")
     except subprocess.CalledProcessError as e:

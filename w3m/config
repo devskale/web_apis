@@ -13,7 +13,7 @@ accept_language de
 use_cookie 1
 accept_cookie 1
 
-display_link_number 0
+display_link_number 1
 display_link 0
 
 # Set user agent string
