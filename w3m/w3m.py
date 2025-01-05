@@ -9,11 +9,6 @@ import platform
 # Path to the custom w3m config file
 w3m_config_path = os.path.join(os.path.dirname(__file__), 'config')
 
-# Determine the correct path for w3m based on the OS
-if platform.system() == 'Linux':
-    w3m_path = '/usr/bin/w3m'
-else:
-    w3m_path = 'w3m'
 
 
 def build_goog_search_url(query: str, num_results: int, domain:str='at') -> str:
@@ -24,6 +19,12 @@ def build_goog_search_url(query: str, num_results: int, domain:str='at') -> str:
 
 def fetch_with_w3m(url: str, links = True) -> str:
     """Fetch a webpage using w3m with a custom config and return the text output."""
+    # Determine the correct path for w3m based on the OS
+    if platform.system() == 'Linux':
+        w3m_path = '/usr/bin/w3m'
+    else:
+        w3m_path = 'w3m'
+
     try:
 #        print("Executing w3m with the following command:")
 #        print(['/usr/bin/w3m', '-config', w3m_config_path, '-dump', url])
