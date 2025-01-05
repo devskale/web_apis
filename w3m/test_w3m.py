@@ -51,7 +51,7 @@ if __name__ == "__main__":
     test3 = True
     if test3 == True:
         print("test3")
-        urllist = w3m_google("Kekimus Maximus", 3)
+        urllist = w3m_google("orf nehammer", 3)
         # print only the first urllst element
 #        printurllist([urllist[0]]) # Wrap the first element in a list
         # get url from the first element

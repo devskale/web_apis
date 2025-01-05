@@ -35,7 +35,7 @@ def fetch_with_w3m(url: str, links = True) -> str:
         if links == True:
             result = subprocess.run(
  #               [w3m_path, '-config', w3m_config_path, '-dump', url],
-                ['w3m', '-config', w3m_config_path, '-o', 'display_link_number=1', url, '-dump'],
+                [w3m_path, '-config', w3m_config_path, '-o', 'display_link_number=1', url, '-dump'],
     #            ['w3m', '-config', w3m_config_path, '-dump', url],
     #            ['/usr/bin/w3m', '-dump', url],
                 capture_output=True,
@@ -45,7 +45,7 @@ def fetch_with_w3m(url: str, links = True) -> str:
             )
         else:
             result = subprocess.run(
-                ['w3m', '-config', w3m_config_path, '-o', 'display_link_number=0', url, '-dump'],
+                [w3m_path, '-config', w3m_config_path, '-o', 'display_link_number=0', url, '-dump'],
                 capture_output=True,
                 text=True,
                 check=True,
