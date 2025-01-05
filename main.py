@@ -60,7 +60,7 @@ def get_duck_translation(text: str, to_language: str):
     return {"results": results}
 
 @app.get("/goog")
-def get_translation(query: str, num_results: int = 10):
+def get_googlesearch(query: str, num_results: int = 10):
     results = goog_search(query, num_results)
     if not results:
         raise HTTPException(status_code=404, detail="No results found.")
