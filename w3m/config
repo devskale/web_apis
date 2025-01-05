@@ -7,13 +7,13 @@ color 1
 display_image 0
 
 # Set the default language for web pages
-accept_language en
+accept_language de
 
 # Cookies (set to 1 if you want to enable)
 use_cookie 1
 accept_cookie 1
 
-display_link_number 1
+display_link_number 0
 display_link 0
 
 # Set user agent string
