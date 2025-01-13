@@ -7,9 +7,16 @@ from goog.goog import goog_search
 from duck.ducknews import search_news, search_text, search_maps, search_translate
 from lynx.lynx import lynx_url
 from fastapi.middleware.cors import CORSMiddleware
+import os
+from dotenv import load_dotenv
 
-TOKEN = "test23"
 security = HTTPBearer()
+
+load_dotenv()
+TOKEN = os.getenv('TOKEN')
+if not TOKEN:
+    raise ValueError("TOKEN environment variable not set")
+
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
     if credentials.credentials != TOKEN:
