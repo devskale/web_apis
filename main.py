@@ -1,5 +1,5 @@
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Query, Depends, Security
+from fastapi import FastAPI, HTTPException, Query, Depends, Security, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from typing import Optional
 from w3m.w3m import fetch_with_w3m, w3m_google
@@ -10,7 +10,17 @@ from lynx.lynx import lynx_url
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
+import logging
+from logging.handlers import RotatingFileHandler
 
+# Setup logger with RotatingFileHandler
+access_logger = logging.getLogger("accessLogger")
+access_logger.setLevel(logging.INFO)
+handler = RotatingFileHandler("api.log", maxBytes=4096, backupCount=1)
+formatter = logging.Formatter(
+    "%(asctime)s - %(client_ip)s - %(method)s - %(path)s")
+handler.setFormatter(formatter)
+access_logger.addHandler(handler)
 
 security = HTTPBearer()
 
@@ -27,7 +37,9 @@ print(f"Loaded {len(valid_tokens)} valid tokens {valid_tokens}")
 
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
-    if credentials.credentials not in valid_tokens:
+    token = credentials.credentials
+    print(f"Received token: {token}")  # Debugging line: print the token
+    if token not in valid_tokens:
         raise HTTPException(
             status_code=401,
             detail="Invalid token",
@@ -50,6 +62,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Logging middleware to log each access
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    response = await call_next(request)
+    log_data = {
+        "client_ip": request.client.host,
+        "method": request.method,
+        "path": request.url.path
+    }
+    access_logger.info("", extra=log_data)
+    return response
 
 
 @app.get("/echo")
@@ -132,7 +158,7 @@ if electricity_path.exists():
         app.include_router(
             electricity_router,
             prefix="/electricity",
-#            dependencies=[Depends(verify_token)]
+            dependencies=[Depends(verify_token)]
         )
         print("Electricity module loaded successfully")
     except ImportError as e:
