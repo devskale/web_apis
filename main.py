@@ -72,7 +72,9 @@ async def log_requests(request: Request, call_next):
     log_data = {
         "client_ip": request.client.host,
         "method": request.method,
-        "path": request.url.path
+        "path": request.url.path,
+        "auth": request.headers.get("Authorization", "no-auth"),
+        "params": str(request.query_params),
     }
     access_logger.info("", extra=log_data)
     return response
