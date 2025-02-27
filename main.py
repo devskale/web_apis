@@ -18,7 +18,7 @@ access_logger = logging.getLogger("accessLogger")
 access_logger.setLevel(logging.INFO)
 handler = RotatingFileHandler("api.log", maxBytes=4096, backupCount=1)
 formatter = logging.Formatter(
-    "%(asctime)s - %(client_ip)s - %(method)s - %(path)s")
+    "%(asctime)s - %(client_ip)s - %(method)s - %(path)s - %(auth)s - %(params)s")
 handler.setFormatter(formatter)
 access_logger.addHandler(handler)
 
