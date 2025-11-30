@@ -5,10 +5,24 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 
-def search_news(topic):
+def search_news(topic, region="wt-wt", safesearch="off", timelimit="m", max_results=8, page=None, backend=None, proxy=None, verify=True):
     try:
-        results = DDGS().news(keywords=topic, region="wt-wt",
-                              safesearch="off", timelimit="m", max_results=8)
+        kwargs = {
+            "query": topic,
+            "region": region,
+            "safesearch": safesearch,
+            "timelimit": timelimit,
+            "max_results": max_results,
+        }
+        if page is not None:
+            kwargs["page"] = page
+        if backend is not None:
+            kwargs["backend"] = backend
+        if proxy is not None:
+            kwargs["proxy"] = proxy
+        if verify is not None:
+            kwargs["verify"] = verify
+        results = DDGS().news(**kwargs)
         return results
     except Exception as e:
         logging.error(f"Error searching for news: {e}")
@@ -80,9 +94,41 @@ def search_web(
         return []
 
 
-def search_maps(topic, place):
+def search_maps(
+    topic,
+    place,
+    region="wt-wt",
+    safesearch="off",
+    timelimit=None,
+    max_results=20,
+    page=None,
+    backend=None,
+    site="google.com",
+    inurl="maps",
+    exact=False,
+    exclude_terms=None,
+    proxy=None,
+    verify=True,
+    filetype=None,
+):
     try:
-        results = DDGS().maps(topic, place=place, max_results=20)
+        q = f"{topic} {place or ''}".strip()
+        results = search_web(
+            q,
+            max_results=max_results,
+            region=region,
+            safesearch=safesearch,
+            timelimit=timelimit,
+            backend=backend,
+            site=site,
+            exact=exact,
+            exclude_terms=exclude_terms,
+            page=page,
+            proxy=proxy,
+            verify=verify,
+            filetype=filetype,
+            inurl=inurl,
+        )
         return results
     except Exception as e:
         logging.error(f"Error searching for maps: {e}")
@@ -91,7 +137,8 @@ def search_maps(topic, place):
 
 def search_translate(topic, to_language):
     try:
-        results = DDGS().translate(topic, to=to_language)
+        q = f"{topic} {to_language}"
+        results = search_web(q, max_results=5, site="translate.google.com")
         return results
     except Exception as e:
         logging.error(f"Error translating: {e}")
