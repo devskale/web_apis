@@ -1,294 +1,316 @@
-# Web APIs
+# Web APIs Service
 
-This document describes the available API endpoints. The base URL for all endpoints is `/api`.
+This is a FastAPI-based web service that provides various web scraping and search APIs. The service runs as a systemd service on port 8001.
 
-## Endpoints
+## API Overview
 
-### 1. Echo
+This service provides multiple endpoints for web scraping and search functionality using different search engines and web browsers.
 
--   **Endpoint:** `/echo`
--   **Method:** `GET`
--   **Description:** Returns the input text as an echo.
--   **Query Parameters:**
-    -   `text` (optional): The text to echo. Defaults to "Hello, World!". Minimum length of 1 character.
--   **Example Request:** `/api/echo?text=MyEcho`
--   **Example Response:**
+### Authentication
 
-    ```json
-    {
-        "echo": "MyEcho"
-    }
-    ```
+All API endpoints require authentication using Bearer tokens defined in your `.env` file. Include the header `Authorization: Bearer YOUR_TOKEN` in your requests.
 
-### 2. W3m Fetch
+The base URL for all endpoints is `/api`.
 
--   **Endpoint:** `/w3m`
--   **Method:** `GET`
--   **Description:** Fetches the content of a given URL using the w3m browser.
--   **Query Parameters:**
-    -   `url` (required): The URL to fetch.
--   **Example Request:** `/api/w3m?url=https://example.com`
--   **Example Response:**
+### Endpoints
 
-    ```json
-    {
-      "content": "<html>...</html>"
-    }
-    ```
--   **Error Response:**
+#### 1. Echo
+- **Endpoint:** `/echo`
+- **Method:** `GET`
+- **Description:** Returns the input text as an echo.
+- **Query Parameters:**
+  - `text` (optional): The text to echo. Defaults to "Hello, World!". Minimum length of 1 character.
+- **Example Request:** `/api/echo?text=MyEcho`
+- **Example Response:**
+```json
+{
+    "echo": "MyEcho"
+}
+```
 
-    ```json
-      {
-        "detail": "Error Message from W3m"
-      }
-    ```
+#### 2. W3m Fetch
+- **Endpoint:** `/w3m`
+- **Method:** `GET`
+- **Description:** Fetches the content of a given URL using the w3m browser.
+- **Query Parameters:**
+  - `url` (required): The URL to fetch.
+- **Example Request:** `/api/w3m?url=https://example.com`
+- **Example Response:**
+```json
+{
+  "content": "<html>...</html>"
+}
+```
+- **Error Response:**
+```json
+{
+  "detail": "Error Message from W3m"
+}
+```
+(Returns 500 status code)
 
-    (Returns 500 status code)
+#### 3. W3m Google Search
+- **Endpoint:** `/w3m_google`
+- **Method:** `GET`
+- **Description:** Performs a Google search using w3m.
+- **Query Parameters:**
+  - `query` (required): The search query.
+  - `num_results` (optional): The number of results to return. Defaults to 10.
+  - `domain` (optional): The search domain, defaults to "at".
+- **Example Request:** `/api/w3m_google?query=fastapi&num_results=5&domain=com`
+- **Example Response:**
+```json
+{
+  "content": "<html>...</html>"
+}
+```
+- **Error Response:**
+```json
+{
+  "detail": "Error Message from W3m"
+}
+```
+(Returns 500 status code)
 
-### 3. W3m Google Search
+#### 4. DuckDuckGo News Search
+- **Endpoint:** `/duck/news`
+- **Method:** `GET`
+- **Description:** Searches for news on DuckDuckGo.
+- **Query Parameters:**
+  - `topic` (required): The topic to search for.
+- **Example Request:** `/api/duck/news?topic=technology`
+- **Example Response:**
+```json
+{
+  "results": [
+    {"title": "News 1", "url": "url1", "source":"source1"},
+    {"title": "News 2", "url": "url2", "source":"source2"}
+   ]
+}
+```
+- **Error Response:**
+```json
+{
+  "detail": "No news found."
+}
+```
+(Returns 404 status code)
 
--   **Endpoint:** `/w3m_google`
--   **Method:** `GET`
--   **Description:** Performs a Google search using w3m.
--   **Query Parameters:**
-    -   `query` (required): The search query.
-    -   `num_results` (optional): The number of results to return. Defaults to 10.
-    -   `domain` (optional): The search domain, defaults to "at".
--   **Example Request:** `/api/w3m_google?query=fastapi&num_results=5&domain=com`
--   **Example Response:**
+#### 5. DuckDuckGo Text Search
+- **Endpoint:** `/duck/text`
+- **Method:** `GET`
+- **Description:** Searches for text on DuckDuckGo.
+- **Query Parameters:**
+  - `topic` (required): The topic to search for.
+- **Example Request:** `/api/duck/text?topic=python`
+- **Example Response:**
+```json
+{
+"results": [
+    {"title": "Title 1", "url": "url1", "body": "Body 1"},
+    {"title": "Title 2", "url": "url2", "body": "Body 2"}
+  ]
+}
+```
+- **Error Response:**
+```json
+{
+  "detail": "No text found."
+}
+```
+(Returns 404 status code)
 
-    ```json
-    {
-      "content": "<html>...</html>"
-    }
-    ```
--   **Error Response:**
+#### 6. DuckDuckGo Maps Search
+- **Endpoint:** `/duck/maps`
+- **Method:** `GET`
+- **Description:** Searches for maps on DuckDuckGo.
+- **Query Parameters:**
+  - `topic` (required): The topic to search for (e.g., location).
+  - `place` (optional): The specific place to search for.
+- **Example Request:** `/api/duck/maps?topic=coffee&place=vienna`
+- **Example Response:**
+```json
+{
+  "results": [
+    {"title": "Place 1", "url": "url1", "address":"address1"},
+    {"title": "Place 2", "url": "url2", "address":"address2"}
+  ]
+}
+```
+- **Error Response:**
+```json
+{
+  "detail": "No maps found."
+}
+```
+(Returns 404 status code)
 
-    ```json
-      {
-          "detail": "Error Message from W3m"
-      }
-    ```
+#### 7. DuckDuckGo Translate
+- **Endpoint:** `/duck/translate`
+- **Method:** `GET`
+- **Description:** Translates text using DuckDuckGo.
+- **Query Parameters:**
+  - `topic` (required): The text to translate.
+  - `to_language` (required): The target language code (e.g., "de", "fr", "es").
+- **Example Request:** `/api/duck/translate?topic=hello&to_language=de`
+- **Example Response:**
+```json
+{
+  "results": "Hallo"
+}
+```
+- **Error Response:**
+```json
+{
+  "detail": "No translation found."
+}
+```
+(Returns 404 status code)
 
-    (Returns 500 status code)
+#### 8. Google Search
+- **Endpoint:** `/goog`
+- **Method:** `GET`
+- **Description:** Performs a Google search.
+- **Query Parameters:**
+  - `query` (required): The search query.
+  - `num_results` (optional): The number of results to return. Defaults to 10.
+- **Example Request:** `/api/goog?query=fastapi&num_results=5`
+- **Example Response:**
+```json
+{
+  "results": [
+    {"title": "Result 1", "url": "url1"},
+    {"title": "Result 2", "url": "url2"}
+  ]
+}
+```
+- **Error Response:**
+```json
+{
+  "detail": "No results found."
+}
+```
+(Returns 404 status code)
 
-### 4. DuckDuckGo News Search
+#### 9. Lynx URL Fetch
+- **Endpoint:** `/lynx`
+- **Method:** `GET`
+- **Description:** Fetches the content of a given URL using the lynx browser.
+- **Query Parameters:**
+  - `url` (required): The URL to fetch.
+- **Example Request:** `/api/lynx?url=https://example.com`
+- **Example Response:**
+```json
+{
+  "results": "<html>...</html>"
+}
+```
+- **Error Response:**
+```json
+{
+  "detail": "No results found."
+}
+```
+(Returns 404 status code)
 
--   **Endpoint:** `/duck/news`
--   **Method:** `GET`
--   **Description:** Searches for news on DuckDuckGo.
--   **Query Parameters:**
-    -   `topic` (required): The topic to search for.
--   **Example Request:** `/api/duck/news?topic=technology`
--   **Example Response:**
+## Service Management
 
-    ```json
-    {
-      "results": [
-        {"title": "News 1", "url": "url1", "source":"source1"},
-        {"title": "News 2", "url": "url2", "source":"source2"}
-       ]
-    }
-    ```
--   **Error Response:**
+The API runs as a systemd service named `fastapi.service`.
 
-    ```json
-      {
-        "detail": "No news found."
-      }
-    ```
+### Service Commands
 
-    (Returns 404 status code)
+- **Start the service:**
+```bash
+sudo systemctl start fastapi
+```
 
-### 5. DuckDuckGo Text Search
+- **Stop the service:**
+```bash
+sudo systemctl stop fastapi
+```
 
--   **Endpoint:** `/duck/text`
--   **Method:** `GET`
--   **Description:** Searches for text on DuckDuckGo.
--   **Query Parameters:**
-    -   `topic` (required): The topic to search for.
--   **Example Request:** `/api/duck/text?topic=python`
--  **Example Response:**
+- **Restart the service:**
+```bash
+sudo systemctl restart fastapi
+```
 
-    ```json
-    {
-    "results": [
-        {"title": "Title 1", "url": "url1", "body": "Body 1"},
-        {"title": "Title 2", "url": "url2", "body": "Body 2"}
-      ]
-    }
-    ```
--   **Error Response:**
+- **Check service status:**
+```bash
+sudo systemctl status fastapi
+```
 
-    ```json
-      {
-          "detail": "No text found."
-      }
-    ```
+- **Enable service at boot:**
+```bash
+sudo systemctl enable fastapi
+```
 
-    (Returns 404 status code)
+- **Disable service at boot:**
+```bash
+sudo systemctl disable fastapi
+```
 
-### 6. DuckDuckGo Maps Search
+### Deployment
 
--   **Endpoint:** `/duck/maps`
--   **Method:** `GET`
--   **Description:** Searches for maps on DuckDuckGo.
--   **Query Parameters:**
-    -   `topic` (required): The topic to search for (e.g., location).
-    -   `place` (optional): The specific place to search for.
--   **Example Request:** `/api/duck/maps?topic=coffee&place=vienna`
--   **Example Response:**
+The `deploy_api.sh` script handles updating and restarting the service:
+```bash
+./deploy_api.sh
+```
 
-    ```json
-    {
-      "results": [
-        {"title": "Place 1", "url": "url1", "address":"address1"},
-        {"title": "Place 2", "url": "url2", "address":"address2"}
-      ]
-    }
-    ```
--   **Error Response:**
+This script will:
+1. Pull the latest code from the repository
+2. Update Python dependencies
+3. Restart the fastapi service
 
-    ```json
-      {
-          "detail": "No maps found."
-      }
-    ```
+### Logs
 
-    (Returns 404 status code)
+Service logs can be viewed with:
+```bash
+sudo journalctl -u fastapi -f
+```
 
-### 7. DuckDuckGo Translate
-
--   **Endpoint:** `/duck/translate`
--   **Method:** `GET`
--   **Description:** Translates text using DuckDuckGo.
--   **Query Parameters:**
-    -   `topic` (required): The text to translate.
-    -   `to_language` (required): The target language code (e.g., "de", "fr", "es").
--   **Example Request:** `/api/duck/translate?topic=hello&to_language=de`
--   **Example Response:**
-
-    ```json
-    {
-        "results": "Hallo"
-    }
-    ```
--   **Error Response:**
-
-    ```json
-      {
-          "detail": "No translation found."
-      }
-    ```
-
-    (Returns 404 status code)
-
-### 8. Google Search
-
--   **Endpoint:** `/goog`
--   **Method:** `GET`
--   **Description:** Performs a Google search.
--   **Query Parameters:**
-    -   `query` (required): The search query.
-    -   `num_results` (optional): The number of results to return. Defaults to 10.
--   **Example Request:** `/api/goog?query=fastapi&num_results=5`
--  **Example Response:**
-
-    ```json
-    {
-      "results": [
-        {"title": "Result 1", "url": "url1"},
-        {"title": "Result 2", "url": "url2"}
-      ]
-    }
-    ```
--   **Error Response:**
-
-    ```json
-      {
-          "detail": "No results found."
-      }
-    ```
-
-    (Returns 404 status code)
-
-### 9. Lynx URL Fetch
-
--   **Endpoint:** `/lynx`
--   **Method:** `GET`
--   **Description:** Fetches the content of a given URL using the lynx browser.
--   **Query Parameters:**
-    -   `url` (required): The URL to fetch.
--   **Example Request:** `/api/lynx?url=https://example.com`
--   **Example Response:**
-
-    ```json
-    {
-      "results": "<html>...</html>"
-    }
-    ```
--   **Error Response:**
-
-    ```json
-      {
-          "detail": "No results found."
-      }
-    ```
-
-    (Returns 404 status code)
-
-## Running the Application
-
-1.  Make sure you have Python installed.
-2.  Install the required packages using pip:
-
-    ```bash
-    pip install fastapi uvicorn
-    ```
-3.  Run the application using:
-
-    ```bash
-    python main.py
-    ```
-
-The API will be available at `http://localhost:8001/api`.
-
-## Key Points
-
-*   **Clear Headers:** Uses clear headers to organize the information.
-*   **Endpoint Details:** Provides each endpoint's path, method, description, parameters, example request and responses.
-*   **Error Handling:** It also mentions the 404 and 500 error responses.
-*   **Usage Instructions:** Gives basic instructions on how to run the application and access the API.
-*   **Markdown:** It's formatted as a Markdown file for easy readability on platforms like GitHub.
-*   **Root Path:** It correctly specifies that the API's root path is `/api`.
-
-This README should give users a good starting point for understanding and using your API.
-
-# web_apis
-
-# Installing APIs on a VPS
+API access logs are stored in `api.log`.
 
 ## Prerequisites
 
-- OCI VPS: Ensure you have an Oracle Cloud Infrastructure (OCI) Virtual Private Server (VPS) set up with a Linux distribution (e.g., Ubuntu 20.04).
-- Nginx: Make sure Nginx is installed on your VPS (`sudo apt install nginx -y`).
+- Python 3.8+
+- Virtual environment (recommended)
+- Required packages (see requirements.txt)
 
-## Deploying FastAPI on OCI VPS
+## Installation on VPS
 
-1.  Connect to Your VPS
-2.  Install requirements
-3.  Run FastAPI:
-    ```bash
-    uvicorn main:app --host 0.0.0.0 --port 8001
-    ```
-4.  Configure Nginx route:
+### Prerequisites
+- Linux VPS (Ubuntu 20.04+ recommended)
+- Nginx installed (`sudo apt install nginx -y`)
 
-    ```bash
-    sudo nano /etc/nginx/sites-available/fastapi
-    ```
+### Steps
+1. Clone the repository
+2. Set up virtual environment
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Configure environment variables (TOKENS in .env file)
+5. Create systemd service file at `/etc/systemd/system/fastapi.service`
+6. Enable and start the service
+7. Configure Nginx reverse proxy (optional):
+   ```bash
+   sudo nano /etc/nginx/sites-available/fastapi
+   ```
+8. Enable the Nginx site:
+   ```bash
+   sudo ln -s /etc/nginx/sites-available/fastapi /etc/nginx/sites-enabled/
+   sudo systemctl restart nginx
+   ```
 
-## Usage
+## Configuration
 
-```bash
-sudo ln -s /etc/nginx/sites-available/fastapi /etc/nginx/sites-enabled/
-sudo systemctl restart nginx
+The service runs on port 8001 and uses gunicorn with uvicorn workers for optimal performance.
+The service runs as user 'ubuntu' with group 'www-data'.
+Working directory is set to `/home/ubuntu/code/web_apis`.
+
+## Security
+
+- Authentication is required for all endpoints using Bearer tokens
+- Tokens are configured in the .env file and loaded at startup
+- CORS is configured to allow all origins (for development)
+- Rate limiting and input validation are implemented
