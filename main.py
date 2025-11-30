@@ -5,7 +5,7 @@ from typing import Optional
 from w3m.w3m import fetch_with_w3m, w3m_google
 from echo.echoing import echoing
 from goog.goog import goog_search
-from duck.ducknews import search_news, search_text, search_maps, search_translate
+from duck.ducknews import search_news, search_text, search_maps, search_translate, search_web
 from lynx.lynx import lynx_url
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -117,6 +117,46 @@ def get_text(text: str, token: str = Depends(verify_token)):
     results = search_text(text)
     if not results:
         raise HTTPException(status_code=404, detail="No text found.")
+    return {"results": results}
+
+
+@app.get("/duck/search")
+def get_duck_search(
+    query: str,
+    max_results: int = 25,
+    region: str = "wt-wt",
+    safesearch: str = "off",
+    timelimit: Optional[str] = None,
+    backend: Optional[str] = None,
+    site: Optional[str] = None,
+    exact: bool = False,
+    exclude: Optional[str] = None,
+    page: Optional[int] = None,
+    proxy: Optional[str] = None,
+    verify: Optional[bool] = True,
+    filetype: Optional[str] = None,
+    inurl: Optional[str] = None,
+    token: str = Depends(verify_token),
+):
+    exclude_terms = [t.strip() for t in exclude.split(",")] if exclude else []
+    results = search_web(
+        query,
+        max_results=max_results,
+        region=region,
+        safesearch=safesearch,
+        timelimit=timelimit,
+        backend=backend,
+        site=site,
+        exact=exact,
+        exclude_terms=exclude_terms,
+        page=page,
+        proxy=proxy,
+        verify=verify,
+        filetype=filetype,
+        inurl=inurl,
+    )
+    if not results:
+        raise HTTPException(status_code=404, detail="No results found.")
     return {"results": results}
 
 

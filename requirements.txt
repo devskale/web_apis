@@ -1,3 +1,5 @@
 fastapi
 uvicorn
-duckduckgo-search
+ddgs
+requests
+beautifulsoup4

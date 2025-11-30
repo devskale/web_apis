@@ -1,5 +1,5 @@
 from ducknews import search_news, search_text, search_maps, search_translate
-from duckduckgo_search import DDGS as ddgs
+from ddgs import DDGS as ddgs
 
 
 def test_search_news():
