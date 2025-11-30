@@ -3,3 +3,4 @@ uvicorn
 ddgs
 requests
 beautifulsoup4
+pdfplumber
