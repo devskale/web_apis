@@ -229,23 +229,29 @@ def process_google_search(text: str) -> list:
     return reranked_results
 
 
-def w3m_google(query: str, num_results: int = 10, domain:str='at', filter:bool='True') -> list:
-    
-    search_url = build_goog_search_url(query, num_results)
-    content = fetch_with_w3m(search_url)
-#    print(result)
-    #print(get_numof_qresults(content))
-    urllist = process_google_search(content)
-    # please print the result starting from "Heute " bis zu "Details & Prognosen"
-#    print(from_start_to_end(result, "Heute", "Details & Prognosen"))
-    # Find the start and end indices
-    '''for idx, item in enumerate(urllist):
-        if item:
-            # Extract the URL and description if they exist
-            url = item.get('url', '').strip()
-            description = item.get('description', '').replace('\n', ' ').strip()
+from ddgs import DDGS
 
-            # Print the id (which is the index), and the first 20 characters of URL and first 200 characters of description
-            print(f"ID: {idx+1}\n\tURL: {url[:] if url else 'None'}\n\tDescription: {description[:] if description else 'None'}")'''
-    
-    return urllist
+def w3m_google(query: str, num_results: int = 10, domain:str='at', filter:bool='True') -> list:
+    """Perform a search using DuckDuckGo (since w3m scraping is blocked) and return results."""
+    try:
+        results = []
+        # DDGS doesn't support 'domain' strictly like google, but region can be used.
+        # Mapping domain 'at' to region 'at-at', 'de' to 'de-de', etc.
+        region = "wt-wt"
+        if domain == "at":
+            region = "at-at"
+        elif domain == "de":
+            region = "de-de"
+        elif domain == "com":
+            region = "us-en"
+            
+        ddgs_gen = DDGS().text(query, region=region, max_results=num_results)
+        for r in ddgs_gen:
+            results.append({
+                "url": r.get("href", ""),
+                "description": r.get("body", "")
+            })
+        return results
+    except Exception as e:
+        print(f"An error occurred with DDGS: {e}")
+        return []

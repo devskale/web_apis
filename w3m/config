@@ -17,4 +17,4 @@ display_link_number 1
 display_link 0
 
 # Set user agent string
-user_agent "w3m/0.5.3 (custom config)"
+user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
