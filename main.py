@@ -1,6 +1,5 @@
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Query, Depends, Security, Request, UploadFile, File
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import FastAPI, HTTPException, Query, Depends, Request
 from typing import Optional
 from w3m.w3m import fetch_with_w3m, w3m_google
 from echo.echoing import echoing
@@ -8,12 +7,12 @@ from goog.goog import goog_search
 from duck.ducknews import search_news, search_text, search_maps, search_translate, search_web
 from lynx.lynx import lynx_url
 from fastapi.middleware.cors import CORSMiddleware
-import os
-from dotenv import load_dotenv
 import logging
 from logging.handlers import RotatingFileHandler
-import io
-import pdfplumber
+
+# Import auth and routers
+from auth import verify_token
+from pdf.router import router as pdf_router
 
 # Setup logger with RotatingFileHandler
 access_logger = logging.getLogger("accessLogger")
@@ -23,32 +22,6 @@ formatter = logging.Formatter(
     "%(asctime)s - %(client_ip)s - %(method)s - %(path)s - %(auth)s - %(params)s")
 handler.setFormatter(formatter)
 access_logger.addHandler(handler)
-
-security = HTTPBearer()
-
-load_dotenv()
-
-# Load tokens from environment variables
-tokens_str = os.getenv('TOKENS')
-if not tokens_str:
-    raise ValueError("TOKENS environment variable not set")
-
-valid_tokens = {token.strip() for token in tokens_str.split(',')}
-# For debugging
-print(f"Loaded {len(valid_tokens)} valid tokens {valid_tokens}")
-
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Security(security)):
-    token = credentials.credentials
-    print(f"Received token: {token}")  # Debugging line: print the token
-    if token not in valid_tokens:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return credentials.credentials
-
 
 origins = [
     "*",
@@ -312,40 +285,8 @@ def get_lynx_url(url: str, token: str = Depends(verify_token)):
     return {"results": results}
 
 
-@app.post(
-    "/pdf/to_md",
-    tags=["PDF"],
-    summary="Convert PDF to Markdown-like text",
-    description=(
-        "Extracts text from a PDF using pdfplumber and returns it as a Markdown-like string. "
-        "Limit: 10MB. Scanned PDFs without OCR will not yield text."),
-)
-async def pdf_to_md(
-    file: UploadFile = File(...,
-                            description="PDF file (≤10MB) to convert to Markdown-like text."),
-    token: str = Depends(verify_token),
-):
-    filename = file.filename or ""
-    if not filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="File must be a PDF")
-    data = await file.read()
-    if len(data) > 10 * 1024 * 1024:
-        raise HTTPException(
-            status_code=413, detail="File too large (max 10MB)")
-    try:
-        with pdfplumber.open(io.BytesIO(data)) as pdf:
-            parts = []
-            for page in pdf.pages:
-                text = page.extract_text() or ""
-                if text:
-                    parts.append(text)
-            markdown = "\n\n".join(parts).strip()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    if not markdown:
-        raise HTTPException(status_code=422, detail="No text extracted")
-    return {"markdown": markdown}
-
+# Include routers
+app.include_router(pdf_router, prefix="/pdf")
 
 # Check for electricity module before importing
 electricity_path = Path(__file__).parent / 'electricity'
