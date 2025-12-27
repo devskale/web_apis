@@ -33,6 +33,7 @@ app = FastAPI(
     root_path="/api",
     title="Web APIs",
     description="Endpoints for DuckDuckGo search, web tools, and PDF-to-Markdown conversion.",
+    version="1.1.0",
 )
 app.add_middleware(
     CORSMiddleware,

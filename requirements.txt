@@ -6,3 +6,4 @@ beautifulsoup4
 pdfplumber
 python-dotenv
 python-multipart
+pymupdf4llm
