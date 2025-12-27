@@ -3,7 +3,11 @@ from fastapi import FastAPI, HTTPException, Query, Depends, Request
 from typing import Optional
 from w3m.w3m import fetch_with_w3m
 from echo.echoing import echoing
-from duck.ducknews import search_news, search_text, search_maps, search_translate, search_web
+from duck.ducknews import (
+    search_news,
+    search_web,
+    search_translate,
+)
 from duck.search import search as duck_search_domain
 from lynx.lynx import lynx_url
 from fastapi.middleware.cors import CORSMiddleware
@@ -126,14 +130,6 @@ def get_news(
     return {"results": results}
 
 
-@app.get("/duck/text")
-def get_text(text: str, token: str = Depends(verify_token)):
-    results = search_text(text)
-    if not results:
-        raise HTTPException(status_code=404, detail="No text found.")
-    return {"results": results}
-
-
 @app.get(
     "/duck/search",
     tags=["Duck"],
@@ -198,67 +194,6 @@ def get_duck_search(
     )
     if not results:
         raise HTTPException(status_code=404, detail="No results found.")
-    return {"results": results}
-
-
-@app.get(
-    "/duck/maps",
-    tags=["Duck"],
-    summary="Maps-like search filtered by domain/URL",
-    description=(
-        "Emulates map search via text results, defaulting to Google Maps (site=google.com, inurl=maps). "
-        "Supports localization, pagination, backend selection, proxy, SSL verification, and query operators."),
-)
-def get_maps(
-    topic: str = Query(..., description="Search topic (e.g., 'apotheke')."),
-    place: Optional[str] = Query(
-        None, description="Place name (e.g., 'neusiedl am see')."),
-    region: str = Query(
-        "wt-wt", description="Localization region, e.g. 'at-at', 'de-de', 'wt-wt'."),
-    safesearch: str = Query(
-        "off", description="Content filter: on, moderate, off."),
-    timelimit: Optional[str] = Query(
-        None, description="Time range: d, w, m, y."),
-    max_results: int = Query(20, description="Maximum number of results."),
-    page: Optional[int] = Query(None, description="Results page number."),
-    backend: Optional[str] = Query(
-        None, description="Backend: auto, all, bing, duckduckgo, yahoo."),
-    site: Optional[str] = Query(
-        "google.com", description="Domain restriction, defaults to google.com."),
-    inurl: Optional[str] = Query(
-        "maps", description="URL fragment filter, defaults to 'maps'."),
-    exact: bool = Query(
-        False, description="Quote the query for exact phrase matching."),
-    exclude: Optional[str] = Query(
-        None, description="Comma-separated terms to exclude."),
-    proxy: Optional[str] = Query(
-        None, description="Proxy URL, e.g. socks5h://127.0.0.1:9150."),
-    verify: Optional[bool] = Query(
-        True, description="Verify SSL certificates."),
-    filetype: Optional[str] = Query(
-        None, description="Filter by file extension."),
-    token: str = Depends(verify_token),
-):
-    exclude_terms = [t.strip() for t in exclude.split(",")] if exclude else []
-    results = search_maps(
-        topic,
-        place,
-        region=region,
-        safesearch=safesearch,
-        timelimit=timelimit,
-        max_results=max_results,
-        page=page,
-        backend=backend,
-        site=site,
-        inurl=inurl,
-        exact=exact,
-        exclude_terms=exclude_terms,
-        proxy=proxy,
-        verify=verify,
-        filetype=filetype,
-    )
-    if not results:
-        raise HTTPException(status_code=404, detail="No maps found.")
     return {"results": results}
 
 

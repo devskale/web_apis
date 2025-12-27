@@ -29,15 +29,6 @@ def search_news(topic, region="wt-wt", safesearch="off", timelimit="m", max_resu
         return []
 
 
-def search_text(topic):
-    try:
-        results = DDGS().text(topic, max_results=5)
-        return results
-    except Exception as e:
-        logging.error(f"Error searching for text: {e}")
-        return []
-
-
 def search_web(
     query,
     max_results=25,
@@ -94,47 +85,6 @@ def search_web(
         return []
 
 
-def search_maps(
-    topic,
-    place,
-    region="wt-wt",
-    safesearch="off",
-    timelimit=None,
-    max_results=20,
-    page=None,
-    backend=None,
-    site="google.com",
-    inurl="maps",
-    exact=False,
-    exclude_terms=None,
-    proxy=None,
-    verify=True,
-    filetype=None,
-):
-    try:
-        q = f"{topic} {place or ''}".strip()
-        results = search_web(
-            q,
-            max_results=max_results,
-            region=region,
-            safesearch=safesearch,
-            timelimit=timelimit,
-            backend=backend,
-            site=site,
-            exact=exact,
-            exclude_terms=exclude_terms,
-            page=page,
-            proxy=proxy,
-            verify=verify,
-            filetype=filetype,
-            inurl=inurl,
-        )
-        return results
-    except Exception as e:
-        logging.error(f"Error searching for maps: {e}")
-        return []
-
-
 def search_translate(topic, to_language):
     try:
         q = f"{topic} {to_language}"
@@ -156,14 +106,6 @@ def format_results_news(results):
     for result in results:
         result['age'] = age_of_article(result['date'])
     return sorted(results, key=lambda x: x['age'])
-
-
-def format_results_text(results):
-    return results
-
-
-def format_results_maps(results):
-    return results
 
 
 def format_results_translate(results):
