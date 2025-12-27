@@ -4,3 +4,5 @@ ddgs
 requests
 beautifulsoup4
 pdfplumber
+python-dotenv
+python-multipart
