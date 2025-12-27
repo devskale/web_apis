@@ -1,4 +1,5 @@
-from w3m import fetch_with_w3m, get_numof_qresults, process_google_search, w3m_google, build_goog_search_url
+from w3m import fetch_with_w3m, get_numof_qresults, process_google_search, build_goog_search_url
+from duck.search import search as w3m_google
 from unittest import mock
 
 def from_start_to_end(text, start_str, end_str):

@@ -10,14 +10,13 @@ import platform
 w3m_config_path = os.path.join(os.path.dirname(__file__), 'config')
 
 
-
-def build_goog_search_url(query: str, num_results: int, domain:str='at') -> str:
+def build_goog_search_url(query: str, num_results: int, domain: str = 'at') -> str:
     """Construct the Google search URL with the given query and number of results."""
     encoded_query = urllib.parse.quote(query)
     return f"https://www.google.{domain}/search?q={encoded_query}&num={num_results}"
 
 
-def fetch_with_w3m(url: str, links = True) -> str:
+def fetch_with_w3m(url: str, links=True) -> str:
     """Fetch a webpage using w3m with a custom config and return the text output."""
     # Determine the correct path for w3m based on the OS
     if platform.system() == 'Linux':
@@ -26,19 +25,20 @@ def fetch_with_w3m(url: str, links = True) -> str:
         w3m_path = 'w3m'
 
     try:
-#        print("Executing w3m with the following command:")
-#        print(['/usr/bin/w3m', '-config', w3m_config_path, '-dump', url])
-#        print("Current PATH:", os.environ["PATH"])
+        #        print("Executing w3m with the following command:")
+        #        print(['/usr/bin/w3m', '-config', w3m_config_path, '-dump', url])
+        #        print("Current PATH:", os.environ["PATH"])
         # on linux w3m is in /usr/bin/w3m
         # on macos w3m is w3m
 
         # Run the w3m command with the custom config file and a 15-second timeout
         if links == True:
             result = subprocess.run(
- #               [w3m_path, '-config', w3m_config_path, '-dump', url],
-                [w3m_path, '-config', w3m_config_path, '-o', 'display_link_number=1', url, '-dump'],
-    #            ['w3m', '-config', w3m_config_path, '-dump', url],
-    #            ['/usr/bin/w3m', '-dump', url],
+                #               [w3m_path, '-config', w3m_config_path, '-dump', url],
+                [w3m_path, '-config', w3m_config_path, '-o',
+                    'display_link_number=1', url, '-dump'],
+                #            ['w3m', '-config', w3m_config_path, '-dump', url],
+                #            ['/usr/bin/w3m', '-dump', url],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -46,14 +46,15 @@ def fetch_with_w3m(url: str, links = True) -> str:
             )
         else:
             result = subprocess.run(
-                [w3m_path, '-config', w3m_config_path, '-o', 'display_link_number=0', url, '-dump'],
+                [w3m_path, '-config', w3m_config_path, '-o',
+                    'display_link_number=0', url, '-dump'],
                 capture_output=True,
                 text=True,
                 check=True,
-                timeout=15  # Set timeout to 15 seconds 
+                timeout=15  # Set timeout to 15 seconds
             )
         return result.stdout
-    
+
     except subprocess.TimeoutExpired:
         raise RuntimeError("The w3m request timed out after 15 seconds.")
     except subprocess.CalledProcessError as e:
@@ -65,7 +66,7 @@ def fetch_with_w3m(url: str, links = True) -> str:
 def get_numof_qresults(text: str) -> list:
     """Process the text output of a Google search and return the search results."""
     # results is a list of dictionaries containing id, url, and title
-    #results = []
+    # results = []
 
     # Initialize max_num to track the highest number in brackets
     max_num = 0
@@ -74,23 +75,22 @@ def get_numof_qresults(text: str) -> list:
         # Find lines that contain a number in brackets, e.g., [1], [2], etc.
         if "[" in line and "]" in line:
             # Extract the content inside the brackets
-            bracket_content = line[line.find("[") + 1 : line.find("]")]
-            
+            bracket_content = line[line.find("[") + 1: line.find("]")]
+
             # Check if the content inside the brackets is numeric
             if bracket_content.isdigit():
                 num = int(bracket_content)
                 # Update max_num if the current number is greater
                 if num > max_num:
                     max_num = num
-                
+
             else:
                 # Handle non-numeric bracket content as needed
-                print(f"Warning: Non-numeric content found in brackets: {num} '{line}'")
+                print(
+                    f"Warning: Non-numeric content found in brackets: {num} '{line}'")
                 # You could skip this line or handle it differently
 
     return max_num
-
-
 
 
 def split_result(text: str):
@@ -98,7 +98,7 @@ def split_result(text: str):
     # Find all occurrences of [num] using a regex pattern
     pattern = re.compile(r'(\[\d+\])')
     matches = pattern.finditer(text)
-    
+
     # Initialize start position
     start_pos = 0
     chunks = []
@@ -108,10 +108,10 @@ def split_result(text: str):
         # If this is not the first match, save the previous chunk
         if start_pos != 0:
             chunks.append(text[start_pos:match.start()].strip())
-        
+
         # Update start position to the beginning of the current match
         start_pos = match.start()
-    
+
     # Add the last chunk (from the last match to EOF)
     if start_pos != 0:
         chunks.append(text[start_pos:].strip())
@@ -146,13 +146,12 @@ def filtergoo_url(line: str) -> str:
     if 'https://www.google.' in line and 'https://' in line.split('https://www.google.')[-1]:
         # Split the line by 'https://www.google.' and take the second part
         # Then split again by 'https://' to isolate the actual URL
-        url = 'https://' + line.split('https://www.google.')[-1].split('https://', 1)[-1]
+        url = 'https://' + \
+            line.split('https://www.google.')[-1].split('https://', 1)[-1]
         return url
-    
+
     # If no valid structure is found, return the original line or an empty string
     return line
-
-
 
 
 def process_google_search(text: str) -> list:
@@ -174,12 +173,13 @@ def process_google_search(text: str) -> list:
                 while len(results) <= current_id:
                     results.append({"url": None, "description": None})
                 # Store the accumulated description
-                results[current_id]["description"] = " ".join(current_description).strip()
+                results[current_id]["description"] = " ".join(
+                    current_description).strip()
                 current_description = []  # Reset for the next description
 
             # Extract the content inside the brackets (ID)
-            bracket_content = line[line.find("[") + 1 : line.find("]")]
-            
+            bracket_content = line[line.find("[") + 1: line.find("]")]
+
             if bracket_content.isdigit():
                 current_id = int(bracket_content)
 
@@ -199,7 +199,8 @@ def process_google_search(text: str) -> list:
                     if description:
                         current_description.append(description)
             else:
-                print(f"Warning: Non-numeric content found in brackets: '{bracket_content}'")
+                print(
+                    f"Warning: Non-numeric content found in brackets: '{bracket_content}'")
 
         elif current_id is not None:
             # Continue accumulating lines as part of the description
@@ -209,7 +210,8 @@ def process_google_search(text: str) -> list:
     if current_id is not None and current_description:
         while len(results) <= current_id:
             results.append({"url": None, "description": None})
-        results[current_id]["description"] = " ".join(current_description).strip()
+        results[current_id]["description"] = " ".join(
+            current_description).strip()
 
     # rerank the results
     # remove all lines with URLs that are not starting with https://
@@ -224,34 +226,6 @@ def process_google_search(text: str) -> list:
                     'id': idx0,
                     'url': item['url'],
                     'description': item['description'].replace('\n', ' ').strip()
-                    })   # append id, url, description
+                })   # append id, url, description
                 idx0 += 1
     return reranked_results
-
-
-from ddgs import DDGS
-
-def w3m_google(query: str, num_results: int = 10, domain:str='at', filter:bool='True') -> list:
-    """Perform a search using DuckDuckGo (since w3m scraping is blocked) and return results."""
-    try:
-        results = []
-        # DDGS doesn't support 'domain' strictly like google, but region can be used.
-        # Mapping domain 'at' to region 'at-at', 'de' to 'de-de', etc.
-        region = "wt-wt"
-        if domain == "at":
-            region = "at-at"
-        elif domain == "de":
-            region = "de-de"
-        elif domain == "com":
-            region = "us-en"
-            
-        ddgs_gen = DDGS().text(query, region=region, max_results=num_results)
-        for r in ddgs_gen:
-            results.append({
-                "url": r.get("href", ""),
-                "description": r.get("body", "")
-            })
-        return results
-    except Exception as e:
-        print(f"An error occurred with DDGS: {e}")
-        return []

@@ -1,10 +1,10 @@
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Depends, Request
 from typing import Optional
-from w3m.w3m import fetch_with_w3m, w3m_google
+from w3m.w3m import fetch_with_w3m
 from echo.echoing import echoing
-from goog.goog import goog_search
 from duck.ducknews import search_news, search_text, search_maps, search_translate, search_web
+from duck.search import search as duck_search_domain
 from lynx.lynx import lynx_url
 from fastapi.middleware.cors import CORSMiddleware
 import logging
@@ -78,7 +78,7 @@ def w3m_fetch(url: str, token: str = Depends(verify_token)):
 @app.get("/w3m_google")
 def w3m_fetch(query: str, num_results: int = 10, domain: str = "at", token: str = Depends(verify_token)):
     try:
-        content = w3m_google(query, num_results, domain)
+        content = duck_search_domain(query, num_results, domain)
         return {"content": content}
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -267,14 +267,6 @@ def get_duck_translation(text: str, to_language: str, token: str = Depends(verif
     results = search_translate(text, to_language)
     if not results:
         raise HTTPException(status_code=404, detail="No translation found.")
-    return {"results": results}
-
-
-@app.get("/goog")
-def get_googlesearch(query: str, num_results: int = 10, token: str = Depends(verify_token)):
-    results = goog_search(query, num_results)
-    if not results:
-        raise HTTPException(status_code=404, detail="No results found.")
     return {"results": results}
 
 
