@@ -70,11 +70,26 @@ def echo(text: str = Query(default="Hello, World!", min_length=1), token: str = 
     return {"echo": cleaned_text}
 
 
-@app.get("/w3m")
-def w3m_fetch(url: str, token: str = Depends(verify_token)):
+@app.get("/fetch_url")
+def fetch_url(
+    url: str,
+    tool: str = Query(
+        "w3m", description="Tool to use: w3m (default) or lynx."),
+    token: str = Depends(verify_token)
+):
     try:
-        content = fetch_with_w3m(url, links=False)
-        return {"content": content}
+        if tool == "w3m":
+            content = fetch_with_w3m(url, links=False)
+            return {"content": content}
+        elif tool == "lynx":
+            content = lynx_url(url)
+            if not content:
+                raise HTTPException(
+                    status_code=404, detail="No content found.")
+            return {"content": content}
+        else:
+            raise HTTPException(
+                status_code=400, detail="Invalid tool. Use 'w3m' or 'lynx'.")
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -202,14 +217,6 @@ def get_duck_translation(text: str, to_language: str, token: str = Depends(verif
     results = search_translate(text, to_language)
     if not results:
         raise HTTPException(status_code=404, detail="No translation found.")
-    return {"results": results}
-
-
-@app.get("/lynx")
-def get_lynx_url(url: str, token: str = Depends(verify_token)):
-    results = lynx_url(url)
-    if not results:
-        raise HTTPException(status_code=404, detail="No results found.")
     return {"results": results}
 
 
