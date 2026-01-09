@@ -3,10 +3,38 @@ import math
 
 # Charset from https://github.com/solst-ice/itoa
 # ".:-=+*#%@" (from darkest to brightest)
-ASCII_CHARS = ".:-=+*#%@"
+ASCII_PALETTES = {
+    "Standard": " .:-=+*#%@",
+    "Detailed": " .'\"`,^:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$",
+    "Blocks": " ░▒▓█",
+    "Triangles": " ◺◹◸◿▸▹►▻▷▶",
+    "Simple": " .-+*#@",
+    "Binary": "01",
+    "Minimal": " .@",
+    "Dots": " .·•●",
+    "Circles": " ○◌◍◐◑●",
+    "Squares": " ▫▪◽◾◻◼",
+    "Shades": " ░▒▓█",
+    "Lines": " -=≡",
+    "Slashes": " /\\|",
+    "Arrows": " ←↑→↓",
+    "Box Drawing": " ─│┼╬█",
+    "Brackets": " ()[]{}",
+    "Waves": " ∼≈≋",
+    "Stars": " .·*✦✧★",
+    "Cards": " ♤♡♢♧",
+    "Music": " ♪♫♬",
+    "Currency": " ¢$€£¥",
+    "Math": " ∙·+×÷",
+    "Dingbats": " ○◇◊◆",
+    "Braille": " ⠁⠃⠇⠏⠟⠿⣿",
+    "Runes": " ᚁᚂᚃᚄᚅᚆᚇᚈ",
+    "Greek": " αβγδεζηθ",
+    "Japanese": " 。あいうえおかきくけこ",
+}
 
 
-def image_to_ascii(image_file, width=100, color=False):
+def image_to_ascii(image_file, width=100, color=False, mode="Standard"):
     """
     Converts an image file to ASCII art.
 
@@ -14,6 +42,7 @@ def image_to_ascii(image_file, width=100, color=False):
         image_file: The image file object (bytes or path).
         width: The desired width of the output ASCII.
         color: Whether to return colorized HTML (not implemented yet, returns monochrome).
+        mode: The ASCII character palette to use.
 
     Returns:
         str: The ASCII art string.
@@ -41,6 +70,8 @@ def image_to_ascii(image_file, width=100, color=False):
 
     pixels = list(img.getdata())
     ascii_img = ""
+    
+    chars = ASCII_PALETTES.get(mode, ASCII_PALETTES["Standard"])
 
     col_count = 0
 
@@ -57,10 +88,10 @@ def image_to_ascii(image_file, width=100, color=False):
         brightness = (0.299 * r + 0.587 * g + 0.114 * b)
 
         # Map brightness to index
-        index = int((brightness / 255) * (len(ASCII_CHARS) - 1))
-        index = max(0, min(index, len(ASCII_CHARS) - 1))
+        index = int((brightness / 255) * (len(chars) - 1))
+        index = max(0, min(index, len(chars) - 1))
 
-        char = ASCII_CHARS[index]
+        char = chars[index]
 
         if color:
             # ANSI TrueColor: \x1b[38;2;R;G;Bm

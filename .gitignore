@@ -5,4 +5,6 @@ __pycache__
 *.env
 electricity
 *.log
+*.log.*
 data/
+itoa_referenceapp
