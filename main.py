@@ -43,7 +43,6 @@ app = FastAPI(
 
 app.include_router(pdf_router, prefix="/pdf", tags=["PDF"])
 app.include_router(itoa_router, prefix="/itoa", tags=["itoa"])
-app.include_router(ascii_router, prefix="/ascii", tags=["ascii"])
 
 app.add_middleware(
     CORSMiddleware,
