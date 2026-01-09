@@ -17,6 +17,7 @@ from logging.handlers import RotatingFileHandler
 # Import auth and routers
 from auth import verify_token
 from pdf.router import router as pdf_router
+from itoa.router import router as itoa_router
 
 # Setup logger with RotatingFileHandler
 access_logger = logging.getLogger("accessLogger")
@@ -39,6 +40,11 @@ app = FastAPI(
     description="Endpoints for DuckDuckGo search, web tools, and PDF-to-Markdown conversion.",
     version="1.1.0",
 )
+
+app.include_router(pdf_router, prefix="/pdf", tags=["PDF"])
+app.include_router(itoa_router, prefix="/itoa", tags=["itoa"])
+app.include_router(ascii_router, prefix="/ascii", tags=["ascii"])
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -219,9 +225,6 @@ def get_duck_translation(text: str, to_language: str, token: str = Depends(verif
         raise HTTPException(status_code=404, detail="No translation found.")
     return {"results": results}
 
-
-# Include routers
-app.include_router(pdf_router, prefix="/pdf")
 
 # Check for electricity module before importing
 electricity_path = Path(__file__).parent / 'electricity'
