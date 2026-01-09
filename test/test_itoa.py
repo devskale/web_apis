@@ -1,8 +1,13 @@
-from itoa.core import image_to_ascii
-from PIL import Image
-import io
+import sys
 import os
+
+# Add project root to path so we can import itoa
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import glob
+import io
+from PIL import Image
+from itoa.core import image_to_ascii
 
 
 def test_image_to_ascii_from_data():

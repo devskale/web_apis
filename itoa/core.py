@@ -70,7 +70,7 @@ def image_to_ascii(image_file, width=100, color=False, mode="Standard"):
 
     pixels = list(img.getdata())
     ascii_img = ""
-    
+
     chars = ASCII_PALETTES.get(mode, ASCII_PALETTES["Standard"])
 
     col_count = 0
