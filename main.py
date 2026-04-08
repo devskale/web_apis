@@ -225,6 +225,18 @@ def get_duck_translation(text: str, to_language: str, token: str = Depends(verif
     return {"results": results}
 
 
+# Check for firmenbuch module before importing
+firmenbuch_path = Path(__file__).parent / 'firmenbuch'
+if firmenbuch_path.exists():
+    try:
+        from firmenbuch.router import router as firmenbuch_router
+        app.include_router(firmenbuch_router, prefix="/firmenbuch", tags=["Firmenbuch"])
+        print("Firmenbuch module loaded successfully")
+    except ImportError as e:
+        print(f"Firmenbuch module found but could not be loaded: {e}")
+else:
+    print("Firmenbuch module not found")
+
 # Check for electricity module before importing
 electricity_path = Path(__file__).parent / 'electricity'
 if electricity_path.exists():

@@ -4,6 +4,9 @@ __pycache__
 .aider*
 *.env
 electricity
+firmenbuch
+hvd_cli
+fb_cli
 *.log
 *.log.*
 data/
