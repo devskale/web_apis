@@ -4,7 +4,7 @@ This is a FastAPI-based web service that provides various web scraping and searc
 
 ## API Overview
 
-This service provides multiple endpoints for web scraping and search functionality using different search engines and web browsers.
+This service provides multiple endpoint groups for web scraping, search functionality, and Austrian company register (Firmenbuch) data.
 
 ### Authentication
 
@@ -12,206 +12,532 @@ All API endpoints require authentication using Bearer tokens defined in your `.e
 
 The base URL for all endpoints is `/api`.
 
-### Endpoints
+---
 
-#### 1. Echo
-- **Endpoint:** `/echo`
-- **Method:** `GET`
-- **Description:** Returns the input text as an echo.
-- **Query Parameters:**
-  - `text` (optional): The text to echo. Defaults to "Hello, World!". Minimum length of 1 character.
-- **Example Request:** `/api/echo?text=MyEcho`
-- **Example Response:**
-```json
-{
-    "echo": "MyEcho"
-}
+## Firmenbuch (Austrian Company Register)
+
+Access Austrian company register data from **evi.gv.at** (free) and the **BMJ HVD SOAP API** (requires token). Includes ÖNACE industry classification from Statistik Austria.
+
+**Data sources:**
+| Source | Auth | What it provides |
+|--------|------|-----------------|
+| evi.gv.at | None (free) | Status, registration date, share capital, fiscal year, representation text, publications, Aufsichtsrat, Gesellschafter |
+| BMJ HVD SOAP | HVDAT_TOKEN | Structured address, persons with DOB + nationality, functions with representation details, Vollzug (filing history), EUID, branch offices, legal proceedings |
+| Statistik Austria | None (public) | ÖNACE industry classification |
+
+**Attribution:** Republik Österreich — Bundesministerium für Justiz, Bundesministerium für Kunst, Kultur, öffentlicher Dienst und Sport. Licensed under CC BY 4.0.
+
+### Test Companies
+
+| FN | Company |
+|----|---------|
+| `475207i` | Brantner Österreich GmbH |
+| `188942g` | Riener Nachfolger GmbH |
+| `46653h` | Saubermacher DienstleistungsAG |
+
+---
+
+#### GET /firmenbuch/search
+
+Search companies by name via evi.gv.at (free, no HVD token needed).
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | string | ✅ | Company name (fuzzy search) |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/firmenbuch/search?query=brantner"
 ```
 
-#### 2. W3m Fetch
-- **Endpoint:** `/w3m`
-- **Method:** `GET`
-- **Description:** Fetches the content of a given URL using the w3m browser.
-- **Query Parameters:**
-  - `url` (required): The URL to fetch.
-- **Example Request:** `/api/w3m?url=https://example.com`
-- **Example Response:**
-```json
-{
-  "content": "<html>...</html>"
-}
-```
-- **Error Response:**
-```json
-{
-  "detail": "Error Message from W3m"
-}
-```
-(Returns 500 status code)
-
-#### 3. W3m Google Search
-- **Endpoint:** `/w3m_google`
-- **Method:** `GET`
-- **Description:** Performs a Google search using w3m.
-- **Query Parameters:**
-  - `query` (required): The search query.
-  - `num_results` (optional): The number of results to return. Defaults to 10.
-  - `domain` (optional): The search domain, defaults to "at".
-- **Example Request:** `/api/w3m_google?query=fastapi&num_results=5&domain=com`
-- **Example Response:**
-```json
-{
-  "content": "<html>...</html>"
-}
-```
-- **Error Response:**
-```json
-{
-  "detail": "Error Message from W3m"
-}
-```
-(Returns 500 status code)
-
-#### 4. DuckDuckGo News Search
-- **Endpoint:** `/duck/news`
-- **Method:** `GET`
-- **Description:** Searches for news on DuckDuckGo.
-- **Query Parameters:**
-  - `topic` (required): The topic to search for.
-- **Example Request:** `/api/duck/news?topic=technology`
-- **Example Response:**
+**Response:**
 ```json
 {
   "results": [
-    {"title": "News 1", "url": "url1", "source":"source1"},
-    {"title": "News 2", "url": "url2", "source":"source2"}
-   ]
-}
-```
-- **Error Response:**
-```json
-{
-  "detail": "No news found."
-}
-```
-(Returns 404 status code)
-
-#### 5. DuckDuckGo Text Search
-- **Endpoint:** `/duck/text`
-- **Method:** `GET`
-- **Description:** Searches for text on DuckDuckGo.
-- **Query Parameters:**
-  - `topic` (required): The topic to search for.
-- **Example Request:** `/api/duck/text?topic=python`
-- **Example Response:**
-```json
-{
-"results": [
-    {"title": "Title 1", "url": "url1", "body": "Body 1"},
-    {"title": "Title 2", "url": "url2", "body": "Body 2"}
+    {"fn": "475207i", "name": "Brantner Österreich GmbH"},
+    {"fn": "128972s", "name": "Brantner Gruppe GmbH"},
+    {"fn": "273103y", "name": "Brantner Saubermacher Umweltservice GmbH"}
   ]
 }
 ```
-- **Error Response:**
-```json
-{
-  "detail": "No text found."
-}
-```
-(Returns 404 status code)
 
-#### 6. DuckDuckGo Maps Search
-- **Endpoint:** `/duck/maps`
-- **Method:** `GET`
-- **Description:** Searches for maps on DuckDuckGo.
-- **Query Parameters:**
-  - `topic` (required): The topic to search for (e.g., location).
-  - `place` (optional): The specific place to search for.
-- **Example Request:** `/api/duck/maps?topic=coffee&place=vienna`
-- **Example Response:**
+---
+
+#### GET /firmenbuch/search/rich
+
+Search companies with seat (city) info. Makes one additional request per unique FN.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | string | ✅ | Company name (fuzzy search) |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/firmenbuch/search/rich?query=riener+nachfolger"
+```
+
+**Response:**
 ```json
 {
   "results": [
-    {"title": "Place 1", "url": "url1", "address":"address1"},
-    {"title": "Place 2", "url": "url2", "address":"address2"}
+    {"fn": "188942g", "name": "Riener Nachfolger GmbH", "seat": "Wien"}
   ]
 }
 ```
-- **Error Response:**
-```json
-{
-  "detail": "No maps found."
-}
-```
-(Returns 404 status code)
 
-#### 7. DuckDuckGo Translate
-- **Endpoint:** `/duck/translate`
-- **Method:** `GET`
-- **Description:** Translates text using DuckDuckGo.
-- **Query Parameters:**
-  - `topic` (required): The text to translate.
-  - `to_language` (required): The target language code (e.g., "de", "fr", "es").
-- **Example Request:** `/api/duck/translate?topic=hello&to_language=de`
-- **Example Response:**
-```json
-{
-  "results": "Hallo"
-}
-```
-- **Error Response:**
-```json
-{
-  "detail": "No translation found."
-}
-```
-(Returns 404 status code)
+---
 
-#### 8. Google Search
-- **Endpoint:** `/goog`
-- **Method:** `GET`
-- **Description:** Performs a Google search.
-- **Query Parameters:**
-  - `query` (required): The search query.
-  - `num_results` (optional): The number of results to return. Defaults to 10.
-- **Example Request:** `/api/goog?query=fastapi&num_results=5`
-- **Example Response:**
+#### GET /firmenbuch/lookup
+
+Look up a company by Firmenbuchnummer (FN) on evi.gv.at.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `fn` | string | ✅ | Firmenbuchnummer, e.g. `475207i` |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/firmenbuch/lookup?fn=188942g"
+```
+
+**Response:**
+```json
+{
+  "name": "evi.gv.at | Riener Nachfolger GmbH 1210 Wien | Firmenbuch",
+  "fn": "188942g",
+  "status": "Aktiv",
+  "address": "Pastorstraße 47, 1210 Wien",
+  "city": "Wien",
+  "registered": "16.12.1999",
+  "legal_form": "Gesellschaft mit beschränkter Haftung",
+  "fiscal_year_end": "31.12.",
+  "share_capital": "EUR 35.000",
+  "purpose": "Güterbeförderungsgewerbe",
+  "representation": "Die Gesellschaft wird durch zwei Geschäftsführer gemeinsam vertreten...",
+  "persons": [
+    {"name": "Adeeb Riener", "role": "Geschäftsführer/in", "since": "16.12.1999"},
+    {"name": "Ursula Riener", "role": "Geschäftsführer/in", "since": "05.11.2013"}
+  ],
+  "publications": [
+    {"date": "05.11.2013", "type": "Eingetragen im Firmenbuch", "details": ["..."]}
+  ]
+}
+```
+
+---
+
+#### GET /firmenbuch/lookup/merged ⭐
+
+Full company record merged from evi + HVD + ÖNACE. **Recommended endpoint** for complete data.
+
+HVD provides structured address, person birthdates, nationalities, Vollzug history, EUID, and branch offices. evi supplements with status, publications, and representation text. Every field's origin is tracked in `_sources`.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `fn` | string | ✅ | Firmenbuchnummer, e.g. `475207i` |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/firmenbuch/lookup/merged?fn=475207i"
+```
+
+**Response (truncated):**
+```json
+{
+  "fn": "475207i",
+  "name": "Brantner Österreich GmbH",
+  "status": "Aktiv",
+  "address": {
+    "strasse": "Dr. Franz Wilhelm-Straße",
+    "hausnummer": "2a",
+    "plz": "3500",
+    "ort": "Krems an der Donau",
+    "staat": "AUT"
+  },
+  "address_text": "Dr. Franz Wilhelm-Straße, 2a, 3500, Krems an der Donau",
+  "seat": "Krems an der Donau",
+  "registered": "27.07.2017",
+  "legal_form": "Gesellschaft mit beschränkter Haftung",
+  "legal_form_code": "GES",
+  "share_capital": {"amount": 450000.0, "currency": "EUR"},
+  "persons": [
+    {
+      "name": "Josef Scheidl",
+      "role": "Geschäftsführer/in",
+      "since": "2018-09-18",
+      "source": "hvd,evi",
+      "birthdate": "1969-07-01"
+    },
+    {
+      "name": "Otto Burger",
+      "role": "Prokurist/in",
+      "since": "2018-10-03",
+      "source": "hvd,evi",
+      "birthdate": "1967-06-15"
+    }
+  ],
+  "vollzug": [
+    {
+      "vnr": "001",
+      "vollzugsdatum": "2017-07-27",
+      "court": {"code": "217", "text": "Bezirksgericht Krems an der Donau"},
+      "antragstext": ["Firmenbuchnummer 475207 i"]
+    }
+  ],
+  "oenace": {
+    "oenace_code": "38110",
+    "section": "Wasserversorgung und Abfallentsorgung",
+    "division": "Sammlung und Beseitigung von Abfällen",
+    "subclass": "Sammlung nicht gefährlicher Abfälle"
+  },
+  "_sources": {
+    "fn": "hvd", "name": "hvd", "status": "evi", "address": "hvd",
+    "seat": "hvd", "registered": "evi", "legal_form": "hvd",
+    "share_capital": "hvd", "persons": "hvd,evi", "vollzug": "hvd",
+    "oenace": "statistik.gv.at"
+  }
+}
+```
+
+---
+
+#### GET /firmenbuch/oenace
+
+Look up ÖNACE industry classification for a company.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `fn` | string | ✅ | Firmenbuchnummer |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/firmenbuch/oenace?fn=475207i"
+```
+
+**Response:**
+```json
+{
+  "oenace_code": "38110",
+  "source": "statistik.gv.at (CC BY 4.0)",
+  "section": "Wasserversorgung und Abfallentsorgung",
+  "division": "Sammlung und Beseitigung von Abfällen",
+  "subclass": "Sammlung nicht gefährlicher Abfälle"
+}
+```
+
+---
+
+### HVD Endpoints (require HVDAT_TOKEN)
+
+These endpoints query the BMJ HVD SOAP API directly. They require `HVDAT_TOKEN` in the server's `.env` file.
+
+---
+
+#### GET /firmenbuch/hvd/token-check
+
+Validate the HVD API token.
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/firmenbuch/hvd/token-check"
+```
+
+**Response:**
+```json
+{"status": "ok", "message": "Token accepted by HVD endpoint"}
+```
+
+---
+
+#### GET /firmenbuch/hvd/suche-firma
+
+Advanced company search via HVD with filters.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | string | ✅ | Company name |
+| `exakt` | bool | No | Exact search (default: phonetic) |
+| `gericht` | string | No | Court code, e.g. `007` (Handelsgericht Wien) |
+| `rechtsform` | string | No | Legal form code, e.g. `GES` (GmbH), `AG`, `KG` |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/firmenbuch/hvd/suche-firma?query=riener+nachfolger"
+```
+
+**Response:**
 ```json
 {
   "results": [
-    {"title": "Result 1", "url": "url1"},
-    {"title": "Result 2", "url": "url2"}
+    {
+      "fnr": "188942g",
+      "status": "",
+      "name_lines": ["Riener Nachfolger GmbH"],
+      "sitz": "Wien",
+      "rechtsform_code": "GES",
+      "rechtsform_text": "Gesellschaft mit beschränkter Haftung",
+      "gericht_code": "007",
+      "gericht_text": "Handelsgericht Wien"
+    }
   ]
 }
 ```
-- **Error Response:**
-```json
-{
-  "detail": "No results found."
-}
-```
-(Returns 404 status code)
 
-#### 9. Lynx URL Fetch
-- **Endpoint:** `/lynx`
-- **Method:** `GET`
-- **Description:** Fetches the content of a given URL using the lynx browser.
-- **Query Parameters:**
-  - `url` (required): The URL to fetch.
-- **Example Request:** `/api/lynx?url=https://example.com`
-- **Example Response:**
+---
+
+#### GET /firmenbuch/hvd/suche-urkunde
+
+Search documents (Urkunden) by FN or Aktenzeichen.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `fnr` | string | One of | Firmenbuchnummer, e.g. `188942g` |
+| `az` | string | One of | Aktenzeichen, e.g. `007 61 Fr 2164/15 w` |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/firmenbuch/hvd/suche-urkunde?fnr=188942g"
+```
+
+**Response:**
 ```json
 {
-  "results": "<html>...</html>"
+  "results": [
+    {
+      "key": "188942_0070710602369_000___000_00_437575_PDF",
+      "fnr": "188942 g",
+      "az": "007 071 Fr 2369/06 f",
+      "dokumentart_code": "48",
+      "dokumentart_text": "Jahresabschluss",
+      "content_type": "application/pdf",
+      "dateiendung": "pdf",
+      "groesse": 150074
+    }
+  ]
 }
 ```
-- **Error Response:**
+
+---
+
+#### GET /firmenbuch/hvd/auszug
+
+Full structured Firmenbuchauszug (extract) via HVD. Returns the most comprehensive company record including all persons, functions, capital, branch offices, legal proceedings, and filing history.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `fnr` | string | ✅ | Firmenbuchnummer, e.g. `188942g` |
+| `stichtag` | string | ✅ | Date in YYYY-MM-DD format |
+| `umfang` | string | No | `Kurzinformation` (default) |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/firmenbuch/hvd/auszug?fnr=475207i&stichtag=2025-04-08"
+```
+
+**Response (truncated):**
 ```json
 {
-  "detail": "No results found."
+  "fnr": "475207 i",
+  "stichtag": "2025-04-08",
+  "umfang": "Kurzinformation",
+  "pruefsumme": "BD6B1FED9AF9856BFDD7810599B14EEC",
+  "company_name": ["Brantner Österreich GmbH"],
+  "company_address": {
+    "strasse": "Dr. Franz Wilhelm-Straße",
+    "hausnummer": "2a", "plz": "3500",
+    "ort": "Krems an der Donau", "staat": "AUT"
+  },
+  "company_seat": "Krems an der Donau",
+  "company_legal_form": {"code": "GES", "text": "Gesellschaft mit beschränkter Haftung"},
+  "company_share_capital": [{"currency": "EUR", "capital": 450000.0, "aufrecht": true}],
+  "persons_with_functions": [
+    {
+      "pnr": "I", "name": "Josef Scheidl",
+      "birthdate": "1969-07-01", "nationality": ["AUT"],
+      "functions": [
+        {"fken": "GF", "fkentext": "GESCHÄFTSFÜHRER/IN",
+         "representation": [{"since": "2018-09-18", "aufrecht": true}]}
+      ]
+    }
+  ],
+  "vollzug": [...],
+  "euids": [...],
+  "branch_offices": [...]
 }
 ```
-(Returns 404 status code)
+
+---
+
+#### GET /firmenbuch/hvd/veraenderungen-firma
+
+Query company changes (new registrations, modifications, deletions) in a date range. **Maximum 7 days** per request.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `von` | string | ✅ | Start date YYYY-MM-DD |
+| `bis` | string | ✅ | End date YYYY-MM-DD (max 7 days from `von`) |
+| `gericht` | string | No | Court code, e.g. `239` |
+| `rechtsform` | string | No | Legal form code, e.g. `GES` |
+| `art` | string | No | Change type, e.g. `EINTRITT_IN_FUNKTION` |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/firmenbuch/hvd/veraenderungen-firma?von=2024-01-01&bis=2024-01-07"
+```
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "fnr": "226 h",
+      "vnr": "037",
+      "vollzugsdatum": "2024-01-06",
+      "art_veraenderung": "Änderung",
+      "details": []
+    }
+  ]
+}
+```
+
+---
+
+#### GET /firmenbuch/hvd/veraenderungen-urkunde
+
+Query document changes in a date range. **Maximum 7 days** per request.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `von` | string | ✅ | Start date YYYY-MM-DD |
+| `bis` | string | ✅ | End date YYYY-MM-DD (max 7 days from `von`) |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/firmenbuch/hvd/veraenderungen-urkunde?von=2024-01-01&bis=2024-01-07"
+```
+
+---
+
+### Firmenbuch Error Codes
+
+| HTTP Code | When |
+|-----------|------|
+| 200 | Success |
+| 400 | Invalid FN format, date > 7 days, bad parameters |
+| 401 | Missing or invalid Bearer token |
+| 403 | HVD token rejected |
+| 404 | Company not found, no search results, no changes in period |
+| 502 | evi.gv.at or HVD upstream error |
+| 503 | HVD not configured (missing deps or token) |
+
+---
+
+## DuckDuckGo Search
+
+### GET /duck/news
+
+Search for news articles with localization and filtering.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `topic` | string | ✅ | News search topic |
+| `region` | string | No | `at-at`, `de-de`, `wt-wt` (default) |
+| `safesearch` | string | No | `on`, `moderate`, `off` (default) |
+| `timelimit` | string | No | `d`, `w`, `m`, `y` |
+| `max_results` | int | No | Default: 8 |
+| `backend` | string | No | `auto`, `bing`, `duckduckgo`, `google`, etc. |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/duck/news?topic=technology&region=at-at&timelimit=m"
+```
+
+### GET /duck/search
+
+Text search with advanced filters. Supports operators: `site:`, `filetype:`, `inurl:`.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | string | ✅ | Search query |
+| `max_results` | int | No | Default: 25 |
+| `region` | string | No | Default: `wt-wt` |
+| `site` | string | No | Restrict to domain |
+| `exact` | bool | No | Exact phrase match |
+| `exclude` | string | No | Comma-separated terms to exclude |
+| `filetype` | string | No | Filter by extension |
+| `inurl` | string | No | Filter by URL fragment |
+| `backend` | string | No | Search backend selection |
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/duck/search?query=fastapi+site:github.com&max_results=10"
+```
+
+### GET /duck/translate
+
+**Parameters:** `text` (required), `to_language` (required, e.g. `de`, `fr`, `es`)
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-server/api/duck/translate?text=hello&to_language=de"
+```
+
+---
+
+## Utility Endpoints
+
+### GET /echo
+
+Returns input text. Useful for health checks.
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" "https://your-server/api/echo?text=ping"
+```
+
+### GET /fetch_url
+
+Fetch URL content using w3m or lynx.
+
+**Parameters:** `url` (required), `tool` (`w3m` or `lynx`, default: `w3m`)
+
+### GET /w3m_google
+
+Google search via w3m with domain-specific results.
+
+**Parameters:** `query` (required), `num_results` (default: 10), `domain` (default: `at`)
+
+### GET /lynx
+
+Fetch URL content using lynx browser.
+
+**Parameters:** `url` (required)
+
+---
 
 ## Service Management
 
@@ -219,39 +545,16 @@ The API runs as a systemd service named `fastapi.service`.
 
 ### Service Commands
 
-- **Start the service:**
 ```bash
 sudo systemctl start fastapi
-```
-
-- **Stop the service:**
-```bash
 sudo systemctl stop fastapi
-```
-
-- **Restart the service:**
-```bash
 sudo systemctl restart fastapi
-```
-
-- **Check service status:**
-```bash
 sudo systemctl status fastapi
-```
-
-- **Enable service at boot:**
-```bash
 sudo systemctl enable fastapi
-```
-
-- **Disable service at boot:**
-```bash
-sudo systemctl disable fastapi
 ```
 
 ### Deployment
 
-The `deploy_api.sh` script handles updating and restarting the service:
 ```bash
 ./deploy_api.sh
 ```
@@ -263,7 +566,6 @@ This script will:
 
 ### Logs
 
-Service logs can be viewed with:
 ```bash
 sudo journalctl -u fastapi -f
 ```
@@ -272,43 +574,23 @@ API access logs are stored in `api.log`.
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.12+
 - Virtual environment (recommended)
 - Required packages (see requirements.txt)
-
-## Installation on VPS
-
-### Prerequisites
-- Linux VPS (Ubuntu 20.04+ recommended)
-- Nginx installed (`sudo apt install nginx -y`)
-
-### Steps
-1. Clone the repository
-2. Set up virtual environment
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Configure environment variables (TOKENS in .env file)
-5. Create systemd service file at `/etc/systemd/system/fastapi.service`
-6. Enable and start the service
-7. Configure Nginx reverse proxy (optional):
-   ```bash
-   sudo nano /etc/nginx/sites-available/fastapi
-   ```
-8. Enable the Nginx site:
-   ```bash
-   sudo ln -s /etc/nginx/sites-available/fastapi /etc/nginx/sites-enabled/
-   sudo systemctl restart nginx
-   ```
+- [firmenbuch_AT](https://github.com/devskale/firmenbuch_AT) — symlinked into project
 
 ## Configuration
 
 The service runs on port 8001 and uses gunicorn with uvicorn workers for optimal performance.
-The service runs as user 'ubuntu' with group 'www-data'.
-Working directory is set to `/home/ubuntu/code/web_apis`.
 
-## Security
+### Environment Variables (.env)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TOKENS` | ✅ | Comma-separated Bearer tokens |
+| `HVDAT_TOKEN` | For HVD endpoints | BMJ HVD API token (or configure credgoo) |
+
+### Security
 
 - Authentication is required for all endpoints using Bearer tokens
 - Tokens are configured in the .env file and loaded at startup
