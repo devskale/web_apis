@@ -230,7 +230,7 @@ firmenbuch_path = Path(__file__).parent / 'firmenbuch'
 if firmenbuch_path.exists():
     try:
         from firmenbuch.router import router as firmenbuch_router
-        app.include_router(firmenbuch_router, prefix="/firmenbuch", tags=["Firmenbuch"])
+        app.include_router(firmenbuch_router, prefix="/firmenbuch", tags=["Firmenbuch"], dependencies=[Depends(verify_token)])
         print("Firmenbuch module loaded successfully")
     except ImportError as e:
         print(f"Firmenbuch module found but could not be loaded: {e}")
