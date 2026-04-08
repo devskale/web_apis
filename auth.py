@@ -27,12 +27,11 @@ if tokens_str is None:
 valid_tokens = {token.strip()
                 for token in tokens_str.split(',')} if tokens_str else set()
 
-# Check for bypass conditions:
+# Check for bypass condition:
 # 1. TOKENS is empty string
-# 2. "test" is in the list of tokens
-if tokens_str == "" or "test" in valid_tokens:
+if tokens_str == "":
     bypass_auth = True
-    print("Auth bypassed: TOKENS is empty or contains 'test' - Accepting any or no token.")
+    print("Auth bypassed: TOKENS is empty - Accepting any or no token.")
 else:
     print(f"Loaded {len(valid_tokens)} valid tokens {valid_tokens}")
 
