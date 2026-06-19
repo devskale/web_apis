@@ -13,6 +13,24 @@ from lynx.lynx import lynx_url
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 from logging.handlers import RotatingFileHandler
+# --- Simple in-memory rate limiter for /firmenbuch ---
+from collections import defaultdict
+import time
+
+_rate_store: dict[str, list[float]] = defaultdict(list)
+_RATE_LIMIT = 30  # requests per window
+_RATE_WINDOW = 60  # seconds
+
+def _check_rate_limit(key: str) -> bool:
+    """Returns True if request is allowed, False if rate limited."""
+    now = time.time()
+    # Clean old entries
+    _rate_store[key] = [t for t in _rate_store[key] if now - t < _RATE_WINDOW]
+    if len(_rate_store[key]) >= _RATE_LIMIT:
+        return False
+    _rate_store[key].append(now)
+    return True
+
 
 # Import auth and routers
 from auth import verify_token
@@ -57,6 +75,17 @@ app.add_middleware(
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
+    # Rate limit check for firmenbuch endpoints
+    if "/firmenbuch/" in request.url.path:
+        token = request.headers.get("Authorization", "anonymous")
+        if not _check_rate_limit(token):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Max 30 requests per minute."},
+                headers={"Retry-After": "60"}
+            )
+
     response = await call_next(request)
     log_data = {
         "client_ip": request.client.host,
@@ -229,11 +258,13 @@ def get_duck_translation(text: str, to_language: str, token: str = Depends(verif
 firmenbuch_path = Path(__file__).parent / 'firmenbuch'
 if firmenbuch_path.exists():
     try:
+        import firmenbuch.router as firmenbuch
         from firmenbuch.router import router as firmenbuch_router
+        firmenbuch.register_exception_handler(app)
         app.include_router(firmenbuch_router, prefix="/firmenbuch", tags=["Firmenbuch"], dependencies=[Depends(verify_token)])
         print("Firmenbuch module loaded successfully")
     except ImportError as e:
-        print(f"Firmenbuch module found but could not be loaded: {e}")
+        logging.error("Firmenbuch module found but could not be loaded: %s", e, exc_info=True)
 else:
     print("Firmenbuch module not found")
 
@@ -249,7 +280,7 @@ if electricity_path.exists():
         )
         print("Electricity module loaded successfully")
     except ImportError as e:
-        print(f"Electricity module found but could not be loaded: {e}")
+        logging.error("Electricity module found but could not be loaded: %s", e, exc_info=True)
 else:
     print("Electricity module not found")
 

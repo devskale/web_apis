@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+gunicorn
 ddgs
 requests
 beautifulsoup4
@@ -8,3 +9,4 @@ python-dotenv
 python-multipart
 pymupdf4llm
 Pillow
+psycopg2-binary
