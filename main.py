@@ -32,6 +32,14 @@ def _check_rate_limit(key: str) -> bool:
     return True
 
 
+def _prune_rate_store() -> None:
+    """Drop keys whose timestamp lists are now empty, so the store can't grow
+    without bound over time (matters on a low-RAM box)."""
+    stale = [k for k, ts in _rate_store.items() if not ts]
+    for k in stale:
+        del _rate_store[k]
+
+
 # Import auth and routers
 from auth import verify_token
 from pdf.router import router as pdf_router
@@ -65,7 +73,7 @@ app.include_router(itoa_router, prefix="/itoa", tags=["itoa"])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -87,6 +95,8 @@ async def log_requests(request: Request, call_next):
             )
 
     response = await call_next(request)
+    # Periodically prune emptied keys so the in-memory store can't leak.
+    _prune_rate_store()
     log_data = {
         "client_ip": request.client.host,
         "method": request.method,
