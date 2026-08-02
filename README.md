@@ -1,6 +1,8 @@
 # Web APIs Service
 
-This is a FastAPI-based web service that provides various web scraping and search APIs. The service runs as a systemd service on port 8001.
+This is a FastAPI-based web service providing web scraping, search, PDF/image conversion, and Austrian company/electricity data APIs.
+
+> **Live deployment:** hosted at **`https://amd.skale.dev/api`** on the `amd` box, running as systemd service `fastapi.service` on port 8001 behind gunicorn + uvicorn workers.
 
 ## API Overview
 
@@ -10,7 +12,7 @@ This service provides multiple endpoint groups for web scraping, search function
 
 All API endpoints require authentication using Bearer tokens defined in your `.env` file. Include the header `Authorization: Bearer YOUR_TOKEN` in your requests.
 
-The base URL for all endpoints is `/api`.
+The base URL for all endpoints is `/api` (live: `https://amd.skale.dev/api`). Replace `https://your-server` in the examples below with `https://amd.skale.dev`.
 
 ---
 
@@ -235,6 +237,63 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 }
 ```
 
+#### GET /firmenbuch/oenace/tree
+
+Browse the ÖNACE 2025 classification hierarchy (sections A–V, levels 1–5).
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `section` | string | No | Filter by section letter (A–V), e.g. `E` |
+| `level` | int | No | Filter by level (1–5) |
+
+**Example response:**
+```json
+{
+  "codes": [
+    {"edv_code": "F", "level": 1, "code_display": "F", "label_de": "Bau", "section": "F", "numeric_code": ""},
+    {"edv_code": "F41", "level": 2, "code_display": "F 41", "label_de": "Hochbau", "section": "F", "numeric_code": "41"}
+  ]
+}
+```
+
+#### GET /firmenbuch/oenace/status
+
+Show ÖNACE database status and last update.
+
+**Example response:**
+```json
+{
+  "oenace": {"rows": 326575, "description": "FN → ÖNACE-Zuordnungen"},
+  "oenace_codes": {"rows": 1758, "description": "ÖNACE 2025 Hierarchie"},
+  "last_update": "2026-07-02T02:00:04.505492+02:00",
+  "source": "Statistik Austria (CC BY 4.0)",
+  "db": "pind.mooo.com:9043/firmenbuch"
+}
+```
+
+#### GET /firmenbuch/oenace/companies
+
+Find companies by ÖNACE code (supports prefix matching, e.g. `F` = all Bau/Handel). With `seat` set, filters server-side to companies whose cached seat matches (case-insensitive substring).
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `code` | string | ✅ | ÖNACE code or prefix, e.g. `6820` or `F` |
+| `limit` | int | No | Max results (default 50, max 200) |
+| `seat` | string | No | Filter by seat/city (substring, case-insensitive) |
+
+**Example response:**
+```json
+{
+  "oenace_code": "38110",
+  "count": 2,
+  "companies": [
+    {"fn": "010142s", "oenace_code": "38110", "oenace_label": null}
+  ]
+}
+```
+
 ---
 
 ### HVD Endpoints (require HVDAT_TOKEN)
@@ -439,6 +498,127 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 
 ---
 
+### Crawl & Cache (Postgres-backed review layer)
+
+These endpoints read from a Postgres cache of ~302k crawled Austrian companies and power a crawl-review UI. They live in the `firmenbuch_AT` module, **not** this repo. All require a valid Bearer token.
+
+#### GET /firmenbuch/cache/status
+
+Show company cache status (rows, hits, TTLs). `available=false` if the cache is not deployed.
+
+**Example response:**
+```json
+{
+  "enabled": true,
+  "available": true,
+  "rows": 302144,
+  "with_name": 302139,
+  "with_merged": 302139,
+  "total_hits": 302149,
+  "last_fetch": "2026-07-02T08:49:00.396646+02:00",
+  "ttl_lookup_days": 3,
+  "ttl_merged_days": 14
+}
+```
+
+#### GET /firmenbuch/crawl/enabled
+
+Whether live crawl actions (refresh/resolve) are enabled. Returns `403` for live actions unless `CRAWL_API_ENABLED=1` is set on the server. **Response:** `{"enabled": true}`
+
+#### GET /firmenbuch/crawl/search
+
+Production loader: server-side filtered + paginated company search. One `COUNT` + one `LIMIT/OFFSET` SELECT per request (never loads the whole 300k+ table). Each company includes `merged_data` for the detail view.
+
+**Parameters:**
+| Param | Type | Description |
+|-------|------|-------------|
+| `q` | string | Name search (ILIKE) |
+| `oenace` | string | ÖNACE code or prefix, e.g. `629` or `F` |
+| `plz` | string | PLZ (ILIKE) |
+| `seat` | string | Seat/city (ILIKE) |
+| `legal` | string | Legal form (ILIKE), e.g. `GmbH` |
+| `street` | string | Street (ILIKE) |
+| `person` | string | Person name (ILIKE across all roles: GF, Gesellschafter, Prokurist, Aufsichtsrat) |
+| `fn` | string | FN (ILIKE) |
+| `sort` | string | `fn\|name\|legal\|plz\|seat\|oenace\|when` |
+| `dir` | string | `asc\|desc` |
+| `page` | int | Page number |
+| `size` | int | Page size |
+
+**Example response:**
+```json
+{
+  "total": 1688,
+  "page": 1,
+  "size": 2,
+  "pages": 844,
+  "companies": [
+    {
+      "fn": "672463t",
+      "name": "Service-Center Schmidberger GmbH",
+      "legal_form": "Gesellschaft mit beschränkter Haftung",
+      "status": "Aktiv",
+      "seat": "Kematen an der Krems",
+      "plz": "4531",
+      "street": "Linzer Straße 54",
+      "oenace_code": "95310",
+      "fetched_at": "2026-07-02T08:44:50.823486+02:00",
+      "merged_data": {"...": "full merged record (evi + HVD + ÖNACE)"}
+    }
+  ]
+}
+```
+
+#### GET /firmenbuch/crawl/recent
+
+Most recently crawled companies (newest `fetched_at` first). **Param:** `limit` (int).
+
+#### GET /firmenbuch/crawl/sections
+
+ÖNACE sections (A–V) with labels + firm counts, for the filter dropdown.
+
+**Example response:**
+```json
+{
+  "sections": [
+    {"section": "F", "label": "Bau", "firms": 0},
+    {"section": "G", "label": "HANDEL", "firms": 0}
+  ]
+}
+```
+
+#### GET /firmenbuch/crawl/shareholders/{fn}
+
+Corporate shareholders of `fn` with resolved-FN status.
+
+**Example response:**
+```json
+{
+  "enabled": true,
+  "available": true,
+  "fn": "475207i",
+  "shareholders": [
+    {"name": "Brantner Environment Group GmbH", "role": "Gesellschafter/in", "since": "18.08.2017", "resolved_fn": "34776t"}
+  ]
+}
+```
+
+#### GET /firmenbuch/crawl/beteiligungen/{fn}
+
+Reverse ownership lookup: companies where `fn` is a shareholder (name-matched against the cached subset). Returns `{"enabled":..., "fn":..., "beteiligungen":[...]}`.
+
+#### GET /firmenbuch/crawl/refresh/{fn}  ⚠️ live
+
+Re-crawl one company (evi, optionally HVD). **Guarded:** `403` unless `CRAWL_API_ENABLED=1`. **Param:** `hvd` (bool, default false — uses metered HVD when true).
+
+**Example response:** `{"fn":"475207i","status":"ok","hvd":"off","merged":true,"name":"Brantner Österreich GmbH"}`
+
+#### GET /firmenbuch/crawl/resolve/{fn}  ⚠️ live
+
+Resolve + crawl the corporate shareholders of `fn` so ownership edges become bidirectional. **Guarded:** `403` unless `CRAWL_API_ENABLED=1`. **Param:** `hvd` (bool).
+
+---
+
 ### Firmenbuch Error Codes
 
 | HTTP Code | When |
@@ -446,10 +626,46 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 | 200 | Success |
 | 400 | Invalid FN format, date > 7 days, bad parameters |
 | 401 | Missing or invalid Bearer token |
-| 403 | HVD token rejected |
+| 403 | HVD token rejected, or live crawl disabled (`CRAWL_API_ENABLED≠1`) |
 | 404 | Company not found, no search results, no changes in period |
+| 429 | Rate limit exceeded (`/firmenbuch/*`: 30 req/min per token) |
 | 502 | evi.gv.at or HVD upstream error |
 | 503 | HVD not configured (missing deps or token) |
+
+---
+
+## Electricity (E-Control AT)
+
+> ⚠️ **Separate auth.** The `electricity` module validates its **own** Bearer token — the global `TOKENS` are rejected with `{"detail":"Invalid bearer token"}`. It is loaded dynamically from a separate `electricity` module (gitignored), like `firmenbuch_AT`.
+
+Austrian electricity data: tariff lists and day-ahead spot-price charts.
+
+---
+
+### GET /electricity/tarifliste
+
+Get a list of electricity tariffs.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `rows` | int | No | Number of tariffs to return (1–100, default 10) |
+| `contentformat` | string | No | Response format (always `json`, default `json`) |
+
+**Response:** dictionary with a `tariffs` list and metadata.
+
+---
+
+### GET /electricity/spotprices/chart/latest
+
+Get the latest available day-ahead spot-price chart.
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `range` | string | No | `singleday` (default) → `price_chart_YYYY-MM-DD.svg`; `range` → `price_chart_YYYY-MM-DD_YYYY-MM-DD.svg` |
+
+**Response:** an SVG chart file.
 
 ---
 
@@ -555,14 +771,22 @@ sudo systemctl enable fastapi
 
 ### Deployment
 
+The service is deployed on the `amd` host and fronted at `https://amd.skale.dev/api`.
+
 ```bash
 ./deploy_api.sh
 ```
 
-This script will:
-1. Pull the latest code from the repository
-2. Update Python dependencies
-3. Restart the fastapi service
+This script runs **on the server** and will:
+1. `git pull` the **web_apis** repository into `/home/ubuntu/code/web_apis`
+2. Update Python dependencies (`pip install -r requirements.txt` inside `.venv`)
+3. Restart the `fastapi` systemd service
+
+> **⚠️ Deployment note — dynamically-loaded modules.** `firmenbuch` (the Austrian company register + crawl/cache/ÖNACE layer, repo [firmenbuch_AT](https://github.com/devskale/firmenbuch_AT)) and `electricity` are **separate repositories**, symlinked into the project root and listed in `.gitignore`. They are **not pulled by `deploy_api.sh`** — to update their endpoints you must update/symlink those repos separately on the server. A normal deploy only touches the local modules (echo, w3m, lynx, duck, pdf, itoa). If a module's symlink is missing at startup, FastAPI logs `"<module> not found"` and its endpoints are simply absent.
+>
+> **Token scoping:** the global `TOKENS` gate every endpoint **except** `electricity`, which verifies its own Bearer token. Set `CRAWL_API_ENABLED=1` to allow the live `crawl/refresh` and `crawl/resolve` actions (otherwise they return `403`).
+>
+> **State:** `/firmenbuch/crawl/*` and `/firmenbuch/cache/*` require the Postgres cache (~302k companies, TTL: lookup 3 days / merged 14 days).
 
 ### Logs
 
@@ -577,7 +801,8 @@ API access logs are stored in `api.log`.
 - Python 3.12+
 - Virtual environment (recommended)
 - Required packages (see requirements.txt)
-- [firmenbuch_AT](https://github.com/devskale/firmenbuch_AT) — symlinked into project
+- [firmenbuch_AT](https://github.com/devskale/firmenbuch_AT) — symlinked into project as `firmenbuch/` (gitignored; provides company register + crawl/cache + ÖNACE endpoints)
+- `electricity/` — separate module symlinked into project (gitignored; provides `/electricity/*` with its own auth)
 
 ## Configuration
 
