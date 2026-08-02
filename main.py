@@ -15,7 +15,25 @@ import logging
 from logging.handlers import RotatingFileHandler
 # --- Simple in-memory rate limiter for /firmenbuch ---
 from collections import defaultdict
+import hashlib
 import time
+
+
+def _mask_auth(header: str | None) -> str:
+    """Return a log-safe representation of an Authorization header.
+
+    Never writes the secret: a ``Bearer <token>`` header becomes
+    ``Bearer <sha256[:8]>`` so the credential itself is unrecoverable,
+    while the short hash still lets you tell which token was used across
+    log lines. Non-Bearer schemes are reduced to their scheme name."""
+    if not header:
+        return "no-auth"
+    parts = header.split(" ", 1)
+    if len(parts) == 2:
+        scheme, credential = parts[0], parts[1]
+        digest = hashlib.sha256(credential.encode("utf-8")).hexdigest()[:8]
+        return f"{scheme} {digest}"
+    return parts[0]
 
 _rate_store: dict[str, list[float]] = defaultdict(list)
 _RATE_LIMIT = 30  # requests per window
@@ -68,7 +86,7 @@ app = FastAPI(
 )
 
 app.include_router(pdf_router, prefix="/pdf", tags=["PDF"])
-app.include_router(itoa_router, prefix="/itoa", tags=["itoa"])
+app.include_router(itoa_router, prefix="/itoa", tags=["itoa"], dependencies=[Depends(verify_token)])
 
 app.add_middleware(
     CORSMiddleware,
@@ -101,7 +119,7 @@ async def log_requests(request: Request, call_next):
         "client_ip": request.client.host,
         "method": request.method,
         "path": request.url.path,
-        "auth": request.headers.get("Authorization", "no-auth"),
+        "auth": _mask_auth(request.headers.get("Authorization")),
         "params": str(request.query_params),
     }
     access_logger.info("", extra=log_data)
