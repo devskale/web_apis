@@ -767,7 +767,7 @@ Fetch URL content using the lynx browser. Same `http(s)`-only rule as `/fetch_ur
 
 ### POST /pdf/to_md
 
-Convert a PDF (≤10MB, `413` above that) to Markdown-like text using `pymupdf4llm` (default) or `pdfplumber`. Scanned PDFs without OCR return `422` (no text extracted). Multipart upload:
+Convert a PDF (≤10MB **and** ≤500 pages, `413` above either) to Markdown-like text using `pymupdf4llm` (default) or `pdfplumber`. Anything that isn't a valid PDF returns `400`; scanned PDFs without OCR return `422` (no text extracted). Multipart upload:
 
 ```bash
 curl -H "Authorization: Bearer YOUR_TOKEN" -F file=@doc.pdf \

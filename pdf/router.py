@@ -1,6 +1,6 @@
 import io
-import os
 import logging
+import os
 import tempfile
 import pdfplumber
 import pymupdf4llm
@@ -12,6 +12,9 @@ from typing import Literal
 router = APIRouter()
 
 MAX_PDF_BYTES = 10 * 1024 * 1024
+# Conversion is CPU/RAM-heavy and the service runs with MemoryMax=400M, so one
+# pathological PDF must not be able to take down the whole service.
+MAX_PDF_PAGES = 500
 
 
 @router.post(
@@ -20,12 +23,15 @@ MAX_PDF_BYTES = 10 * 1024 * 1024
     summary="Convert PDF to Markdown-like text",
     description=(
         "Extracts text from a PDF using the specified converter (pymupdf4llm or pdfplumber). "
-        "Limit: 10MB. Scanned PDFs without OCR will not yield text. "
+        "Limits: 10MB and 500 pages. Scanned PDFs without OCR will not yield text. "
         "Returns markdown content and statistics."),
 )
-async def pdf_to_md(
+# Deliberately a sync endpoint: the conversion is CPU-bound, and FastAPI runs
+# sync endpoints in the threadpool - an async def here would block the worker's
+# event loop (and with it all other requests) for the whole conversion.
+def pdf_to_md(
     file: UploadFile = File(...,
-                            description="PDF file (≤10MB) to convert to Markdown-like text."),
+                            description="PDF file (≤10MB, ≤500 pages) to convert to Markdown-like text."),
     method: Literal["pymupdf4llm", "pdfplumber"] = Query(
         "pymupdf4llm", description="Converter to use: 'pymupdf4llm' (default) or 'pdfplumber'."),
     token: str = Depends(verify_token),
@@ -40,18 +46,31 @@ async def pdf_to_md(
     if file.size is not None and file.size > MAX_PDF_BYTES:
         raise HTTPException(status_code=413, detail="File too large (max 10MB)")
 
-    data = await file.read()
+    data = file.file.read()
     if len(data) > MAX_PDF_BYTES:
         raise HTTPException(
             status_code=413, detail="File too large (max 10MB)")
 
-    markdown = ""
-    page_count = 0
+    # Header sniff + a real parse: garbage with a .pdf name gets a clean 400
+    # instead of a converter traceback. The spec puts the header at byte 0,
+    # but tolerating the first 1KB matches what PDF viewers accept.
+    if b"%PDF-" not in data[:1024]:
+        raise HTTPException(status_code=400, detail="File is not a valid PDF")
+
+    try:
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            page_count = doc.page_count
+    except Exception:
+        raise HTTPException(status_code=400, detail="File is not a valid PDF")
+
+    if page_count > MAX_PDF_PAGES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"PDF has too many pages (max {MAX_PDF_PAGES})")
 
     if method == "pdfplumber":
         try:
             with pdfplumber.open(io.BytesIO(data)) as pdf:
-                page_count = len(pdf.pages)
                 parts = []
                 for page in pdf.pages:
                     text = page.extract_text() or ""
@@ -71,12 +90,6 @@ async def pdf_to_md(
                 tmp_path = tmp.name
 
             try:
-                # Get page count using fitz
-                with fitz.open(tmp_path) as doc:
-                    page_count = doc.page_count
-
-                # Use default settings from the example or minimal settings
-                # pdf2md.py reference: to_markdown(str(pdf_path), **kwargs)
                 markdown = pymupdf4llm.to_markdown(tmp_path)
             finally:
                 if os.path.exists(tmp_path):
