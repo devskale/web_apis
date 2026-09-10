@@ -111,3 +111,12 @@ def test_jobs_need_token():
                     files={"file": ("a.pdf", _pdf(1), "application/pdf")})
     assert r.status_code == 401
     assert client.get("/pdf/jobs/whatever").status_code == 401
+
+
+def test_throway_disabled_503(monkeypatch):
+    monkeypatch.setattr(pdf_router, "THROWAY_ENABLED", False)
+    r = client.post(
+        "/pdf/to_md?method=llamaparse&wait=false&transfer=throway",
+        headers=TOKEN, files={"file": ("a.pdf", _pdf(1), "application/pdf")})
+    assert r.status_code == 503
+    assert "disabled" in r.json()["detail"]

@@ -53,6 +53,9 @@ LLAMA_JOB_SLOTS = 1           # concurrent llamaparse conversions
 THROWAY_URL = "https://skale.dev/throway/"
 THROWAY_TTL_S = 14400         # 4h, per throway contract
 THROWAY_TIMEOUT_S = 60
+# Deployment-level kill switch: THROWAY_ENABLED=0 disables the transfer target
+# (transfer=throway then answers 503). Default: enabled.
+THROWAY_ENABLED = os.getenv("THROWAY_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 
 JOBS_DIR = os.path.join(os.path.dirname(__file__), "data", "pdf_jobs")
 os.makedirs(JOBS_DIR, exist_ok=True)
@@ -377,6 +380,10 @@ def pdf_to_md(
         raise HTTPException(
             status_code=413,
             detail=f"PDF has too many pages (max {MAX_PDF_PAGES})")
+
+    if transfer == "throway" and not THROWAY_ENABLED:
+        raise HTTPException(
+            status_code=503, detail="throway transfer is disabled on this deployment.")
 
     if method == "pdfplumber":
         # Watchdog: the conversion runs in a killable child. A pathological
