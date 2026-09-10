@@ -772,8 +772,7 @@ Convert a PDF (≤10MB **and** ≤500 pages, `413` above either) to Markdown-lik
 **Converters (`method`):**
 | `method` | Where | Notes |
 |----------|-------|-------|
-| `pymupdf4llm` *(default)* | local | fast, text-layer PDFs, no OCR |
-| `pdfplumber` | local | text-layer PDFs |
+| `pdfplumber` *(default)* | local | fast, text-layer PDFs, no OCR |
 | `llamaparse` | ☁️ LlamaCloud (US) | OCR + complex layouts (tables, multi-column); **the document is uploaded to an external service** |
 
 With `method=llamaparse` the optional `tier` param selects the LlamaParse mode: `fast` (default), `cost_effective`, `agentic`, `agentic_plus` — higher tiers cost more credits. Auth for LlamaParse comes from `LLAMA_CLOUD_API_KEY` (env/.env) with a credgoo `llamacloud` fallback. Error mapping: key missing → `503`, quota/rate limit → `429`, LlamaParse failure → `502`, job timeout → `504`.

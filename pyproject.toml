@@ -16,7 +16,6 @@ dependencies = [
     "requests>=2.31",
     # converters
     "pdfplumber>=0.11",
-    "pymupdf4llm>=0.0.17",
     "pymupdf>=1.24",
     "Pillow>=10.0",
     # runtime deps of the symlinked modules that share this venv

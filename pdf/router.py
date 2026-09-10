@@ -8,7 +8,6 @@ import resource
 import tempfile
 import time
 import pdfplumber
-import pymupdf4llm
 import fitz
 import httpx
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Query
@@ -40,8 +39,7 @@ LLAMA_TIERS = ("fast", "cost_effective", "agentic", "agentic_plus")
 def _convert_local(data: bytes, method: str, out_q) -> None:
     """Child-process body for local conversion (see pdf_to_md).
 
-    Never logs here: the child is forked from a threaded worker, and logging
-    locks may be held at fork time.
+    Never logs here: the child is spawned fresh, but keep it side-effect free.
     """
     try:
         # Cap address space (backstop vs. decompression bombs). Best effort:
@@ -54,23 +52,13 @@ def _convert_local(data: bytes, method: str, out_q) -> None:
             resource.setrlimit(resource.RLIMIT_AS, (cap, hard))
         except (ValueError, OSError):
             pass
-        if method == "pdfplumber":
-            with pdfplumber.open(io.BytesIO(data)) as pdf:
-                parts = []
-                for page in pdf.pages:
-                    text = page.extract_text() or ""
-                    if text:
-                        parts.append(text)
-                out_q.put(("ok", "\n\n".join(parts).strip()))
-        else:  # pymupdf4llm
-            fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
-            try:
-                with os.fdopen(fd, "wb") as tmp:
-                    tmp.write(data)
-                out_q.put(("ok", pymupdf4llm.to_markdown(tmp_path)))
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            parts = []
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                if text:
+                    parts.append(text)
+            out_q.put(("ok", "\n\n".join(parts).strip()))
     except Exception as e:
         out_q.put(("error", f"{type(e).__name__}: {e}"))
 
@@ -197,11 +185,11 @@ def _llamaparse_to_markdown(
     tags=["PDF"],
     summary="Convert PDF to Markdown-like text",
     description=(
-        "Extracts text from a PDF using the specified converter: pymupdf4llm (default, "
-        "local, no OCR), pdfplumber (local), or llamaparse (LlamaParse cloud service - "
+        "Extracts text from a PDF using the specified converter: pdfplumber (default, "
+        "local) or llamaparse (LlamaParse cloud service - "
         "handles OCR and complex layouts; the document is uploaded to LlamaCloud). "
         "Limits: 10MB and 500 pages. Scanned PDFs without OCR will not yield text "
-        "with the local converters. Returns markdown content and statistics."),
+        "with the local converter. Returns markdown content and statistics."),
 )
 # Deliberately a sync endpoint: the conversion is CPU-bound, and FastAPI runs
 # sync endpoints in the threadpool - an async def here would block the worker's
@@ -209,10 +197,10 @@ def _llamaparse_to_markdown(
 def pdf_to_md(
     file: UploadFile = File(...,
                             description="PDF file (≤10MB, ≤500 pages) to convert to Markdown-like text."),
-    method: Literal["pymupdf4llm", "pdfplumber", "llamaparse"] = Query(
-        "pymupdf4llm",
-        description="Converter: 'pymupdf4llm' (default, local), 'pdfplumber' (local), "
-                    "or 'llamaparse' (cloud, OCR + complex layouts)."),
+    method: Literal["pdfplumber", "llamaparse"] = Query(
+        "pdfplumber",
+        description="Converter: 'pdfplumber' (default, local) or "
+                    "'llamaparse' (cloud, OCR + complex layouts)."),
     tier: Literal["fast", "cost_effective", "agentic", "agentic_plus"] = Query(
         "fast",
         description="LlamaParse tier; only used with method=llamaparse."),
@@ -253,7 +241,7 @@ def pdf_to_md(
             status_code=413,
             detail=f"PDF has too many pages (max {MAX_PDF_PAGES})")
 
-    if method in ("pdfplumber", "pymupdf4llm"):
+    if method == "pdfplumber":
         # Watchdog: the conversion runs in a killable child. A pathological
         # PDF (decompression bomb, huge stream) gets 504 at the deadline
         # instead of tying the worker up until gunicorn's 120s kill.
