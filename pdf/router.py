@@ -25,7 +25,9 @@ MAX_PDF_PAGES = 500
 # huge streams can hang a parser indefinitely; the child is killed at the
 # deadline (well under the 120s gunicorn worker timeout) and capped in memory.
 PDF_CONVERT_TIMEOUT_S = 60
-PDF_CHILD_RLIMIT_AS = 400 * 1024 * 1024
+# amd has ~1GB total RAM (MemoryMax 400M for the whole service); the child
+# must stay well inside that budget.
+PDF_CHILD_RLIMIT_AS = 200 * 1024 * 1024
 
 LLAMA_PARSE_BASE = "https://api.cloud.llamaindex.ai"
 # Polling budget must stay under the 120s gunicorn worker timeout.
