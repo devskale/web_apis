@@ -158,6 +158,42 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+@app.get("/", include_in_schema=False)
+@app.get("/help", include_in_schema=False)
+def help_(request: Request):
+    """Agent-friendly discovery endpoint: how to authenticate, where the
+    machine-readable spec lives, what the endpoint groups are."""
+    base = str(request.base_url).rstrip("/")
+    return {
+        "service": "Web APIs",
+        "version": app.version,
+        "how_to_use": {
+            "auth": "Send 'Authorization: Bearer <token>' on every endpoint. "
+                    "401 without/invalid token; tokens are configured server-side (TOKENS).",
+            "base_url": base,
+            "machine_readable_spec": base + "/openapi.json",
+            "human_docs": base + "/docs",
+            "example": f"curl -H 'Authorization: Bearer <token>' '{base}/echo?text=ping'",
+        },
+        "endpoint_groups": {
+            "/echo": "health check, echoes sanitized input",
+            "/fetch_url": "fetch a URL as text via w3m or lynx (http(s) only)",
+            "/lynx": "fetch a URL via lynx",
+            "/w3m_google": "web search (DuckDuckGo-backed, region by domain)",
+            "/duck/news": "news search with region/timelimit filters",
+            "/duck/search": "web search with site:/filetype:/inurl: operators",
+            "/duck/translate": "translation-link search",
+            "/pdf/to_md": "POST PDF -> Markdown (pdfplumber local default; "
+                          "method=llamaparse for scans/OCR, tier + language params)",
+            "/itoa/convert": "POST image -> ASCII art (width 1-500, modes)",
+            "/firmenbuch/*": "Austrian company register: search, lookup, merged record, "
+                             "ONACE, HVD extract, crawl cache (30 req/min rate limit)",
+            "/electricity/*": "Austrian electricity tariffs and spot prices "
+                              "(own Bearer token, not the global TOKENS)",
+        },
+    }
+
+
 @app.get("/echo")
 def echo(text: str = Query(default="Hello, World!", min_length=1), token: str = Depends(verify_token)):
     cleaned_text = echoing(text)

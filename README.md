@@ -8,6 +8,10 @@ This is a FastAPI-based web service providing web scraping, search, PDF/image co
 
 This service provides multiple endpoint groups for web scraping, search functionality, and Austrian company register (Firmenbuch) data.
 
+### Agent discovery
+
+`GET /api/help` (no auth) returns a compact JSON orientation for agents: auth model, base URL, endpoint groups with one-liners, and example calls. The full machine-readable spec is at `GET /api/openapi.json` (no auth, includes the `HTTPBearer` security scheme); humans get Swagger UI at `GET /api/docs`.
+
 ### Authentication
 
 All API endpoints require authentication using Bearer tokens defined in your `.env` file. Include the header `Authorization: Bearer YOUR_TOKEN` in your requests.
