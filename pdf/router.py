@@ -1,7 +1,10 @@
 import io
 import json
 import logging
+import multiprocessing
 import os
+import queue as queue_mod
+import resource
 import tempfile
 import time
 import pdfplumber
@@ -15,15 +18,58 @@ from typing import Literal
 router = APIRouter()
 
 MAX_PDF_BYTES = 10 * 1024 * 1024
-# Conversion is CPU/RAM-heavy and the service runs with MemoryMax=400M, so one
+# Conversion is CPU/RAM-heavy and the service runs with MemoryMax, so one
 # pathological PDF must not be able to take down the whole service.
 MAX_PDF_PAGES = 500
+# Local conversion runs in a killable child process: decompression bombs or
+# huge streams can hang a parser indefinitely; the child is killed at the
+# deadline (well under the 120s gunicorn worker timeout) and capped in memory.
+PDF_CONVERT_TIMEOUT_S = 60
+PDF_CHILD_RLIMIT_AS = 400 * 1024 * 1024
 
 LLAMA_PARSE_BASE = "https://api.cloud.llamaindex.ai"
 # Polling budget must stay under the 120s gunicorn worker timeout.
 LLAMA_POLL_TIMEOUT_S = 100
 _LLAMA_POLL_INTERVAL_S = 3
 LLAMA_TIERS = ("fast", "cost_effective", "agentic", "agentic_plus")
+
+
+def _convert_local(data: bytes, method: str, out_q) -> None:
+    """Child-process body for local conversion (see pdf_to_md).
+
+    Never logs here: the child is forked from a threaded worker, and logging
+    locks may be held at fork time.
+    """
+    try:
+        # Cap address space (backstop vs. decompression bombs). Best effort:
+        # macOS refuses to lower RLIMIT_AS from unlimited (fine — dev only);
+        # Linux (production) honors it. Never let this break conversion.
+        try:
+            soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+            cap = (PDF_CHILD_RLIMIT_AS if soft == resource.RLIM_INFINITY
+                   else min(soft, PDF_CHILD_RLIMIT_AS))
+            resource.setrlimit(resource.RLIMIT_AS, (cap, hard))
+        except (ValueError, OSError):
+            pass
+        if method == "pdfplumber":
+            with pdfplumber.open(io.BytesIO(data)) as pdf:
+                parts = []
+                for page in pdf.pages:
+                    text = page.extract_text() or ""
+                    if text:
+                        parts.append(text)
+                out_q.put(("ok", "\n\n".join(parts).strip()))
+        else:  # pymupdf4llm
+            fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+            try:
+                with os.fdopen(fd, "wb") as tmp:
+                    tmp.write(data)
+                out_q.put(("ok", pymupdf4llm.to_markdown(tmp_path)))
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+    except Exception as e:
+        out_q.put(("error", f"{type(e).__name__}: {e}"))
 
 
 def _llama_api_key() -> str:
@@ -204,36 +250,34 @@ def pdf_to_md(
             status_code=413,
             detail=f"PDF has too many pages (max {MAX_PDF_PAGES})")
 
-    if method == "pdfplumber":
+    if method in ("pdfplumber", "pymupdf4llm"):
+        # Watchdog: the conversion runs in a killable child. A pathological
+        # PDF (decompression bomb, huge stream) gets 504 at the deadline
+        # instead of tying the worker up until gunicorn's 120s kill.
+        ctx = multiprocessing.get_context("fork")
+        out_q = ctx.Queue()
+        proc = ctx.Process(
+            target=_convert_local, args=(data, method, out_q), daemon=True)
+        proc.start()
+        proc.join(PDF_CONVERT_TIMEOUT_S)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+            logging.error("pdf/to_md: %s child killed after %ss (likely "
+                          "pathological PDF)", method, PDF_CONVERT_TIMEOUT_S)
+            raise HTTPException(
+                status_code=504, detail="PDF processing timed out.")
         try:
-            with pdfplumber.open(io.BytesIO(data)) as pdf:
-                parts = []
-                for page in pdf.pages:
-                    text = page.extract_text() or ""
-                    if text:
-                        parts.append(text)
-                markdown = "\n\n".join(parts).strip()
-        except Exception:
-            logging.exception("pdf/to_md failed (pdfplumber)")
+            status, payload = out_q.get_nowait()
+        except queue_mod.Empty:
+            logging.error("pdf/to_md: %s child exited without result", method)
             raise HTTPException(
                 status_code=500, detail="PDF processing failed.")
-
-    elif method == "pymupdf4llm":
-        try:
-            # pymupdf4llm expects a file path
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-                tmp.write(data)
-                tmp_path = tmp.name
-
-            try:
-                markdown = pymupdf4llm.to_markdown(tmp_path)
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-        except Exception:
-            logging.exception("pdf/to_md failed (pymupdf4llm)")
+        if status == "error":
+            logging.error("pdf/to_md failed (%s): %s", method, payload)
             raise HTTPException(
                 status_code=500, detail="PDF processing failed.")
+        markdown = payload
 
     elif method == "llamaparse":
         # Cloud parsing: the document leaves this server (LlamaCloud, US).
