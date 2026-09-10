@@ -55,6 +55,7 @@ def _llamaparse_to_markdown(
     data: bytes,
     filename: str,
     tier: str,
+    language: str,
     client: httpx.Client | None = None,
 ) -> str:
     """Upload to LlamaParse, poll the job, return the full markdown.
@@ -62,6 +63,16 @@ def _llamaparse_to_markdown(
     v2 API: POST /parse/upload -> GET /parse/{id} (poll) -> expand=markdown_full.
     """
     headers = {"Authorization": f"Bearer {_llama_api_key()}"}
+    config: dict = {
+        "tier": tier,
+        "version": "latest",
+        "processing_options": {
+            "ocr_parameters": {"languages": [language]} if language else {},
+        },
+        "output_options": {
+            "markdown": {"tables": {"output_tables_as_markdown": True}},
+        },
+    }
     own_client = client is None
     if own_client:
         client = httpx.Client(timeout=30)
@@ -70,7 +81,7 @@ def _llamaparse_to_markdown(
             f"{LLAMA_PARSE_BASE}/api/v2/parse/upload",
             headers=headers,
             files={"file": (filename, data, "application/pdf")},
-            data={"configuration": json.dumps({"tier": tier, "version": "latest"})},
+            data={"configuration": json.dumps(config)},
         )
         if resp.status_code in (401, 403):
             logging.error("llamaparse rejected the API key: %s %s",
@@ -156,6 +167,9 @@ def pdf_to_md(
     tier: Literal["fast", "cost_effective", "agentic", "agentic_plus"] = Query(
         "fast",
         description="LlamaParse tier; only used with method=llamaparse."),
+    language: str = Query(
+        "de",
+        description="OCR language hint (ISO code); only used with method=llamaparse."),
     token: str = Depends(verify_token),
 ):
     filename = file.filename or ""
@@ -223,7 +237,7 @@ def pdf_to_md(
 
     elif method == "llamaparse":
         # Cloud parsing: the document leaves this server (LlamaCloud, US).
-        markdown = _llamaparse_to_markdown(data, filename, tier)
+        markdown = _llamaparse_to_markdown(data, filename, tier, language)
 
     if not markdown:
         raise HTTPException(status_code=422, detail="No text extracted")

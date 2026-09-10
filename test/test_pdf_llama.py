@@ -40,12 +40,14 @@ def test_happy_path_returns_markdown(fake_key):
         return httpx.Response(404)
 
     out = pdf_router._llamaparse_to_markdown(
-        b"%PDF-fake", "doc.pdf", "fast", client=_client(handler))
+        b"%PDF-fake", "doc.pdf", "fast", "de", client=_client(handler))
 
     assert out == "# Page 1\n\n---\n\n# Page 2"
     upload = requests[0]
     assert upload.headers["Authorization"] == "Bearer llx-test"
     assert b'"tier": "fast"' in upload.content
+    assert b'"languages": ["de"]' in upload.content
+    assert b'"output_tables_as_markdown": true' in upload.content
 
 
 def test_rejected_key_maps_to_502(fake_key):
@@ -54,7 +56,7 @@ def test_rejected_key_maps_to_502(fake_key):
 
     with pytest.raises(HTTPException) as exc:
         pdf_router._llamaparse_to_markdown(
-            b"%PDF-fake", "d.pdf", "fast", client=_client(handler))
+            b"%PDF-fake", "d.pdf", "fast", "de", client=_client(handler))
     assert exc.value.status_code == 502
 
 
@@ -66,7 +68,7 @@ def test_quota_maps_to_429(fake_key):
 
     with pytest.raises(HTTPException) as exc:
         pdf_router._llamaparse_to_markdown(
-            b"%PDF-fake", "d.pdf", "fast", client=_client(handler))
+            b"%PDF-fake", "d.pdf", "fast", "de", client=_client(handler))
     assert exc.value.status_code == 429
 
 
@@ -79,7 +81,7 @@ def test_failed_job_maps_to_502(fake_key):
 
     with pytest.raises(HTTPException) as exc:
         pdf_router._llamaparse_to_markdown(
-            b"%PDF-fake", "d.pdf", "fast", client=_client(handler))
+            b"%PDF-fake", "d.pdf", "fast", "de", client=_client(handler))
     assert exc.value.status_code == 502
 
 
@@ -93,7 +95,7 @@ def test_poll_timeout_maps_to_504(fake_key, monkeypatch):
 
     with pytest.raises(HTTPException) as exc:
         pdf_router._llamaparse_to_markdown(
-            b"%PDF-fake", "d.pdf", "fast", client=_client(handler))
+            b"%PDF-fake", "d.pdf", "fast", "de", client=_client(handler))
     assert exc.value.status_code == 504
 
 
