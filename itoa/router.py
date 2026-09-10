@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from itoa.core import image_to_ascii
 from enum import Enum
 import io
+import logging
 
 router = APIRouter()
 
@@ -39,7 +40,9 @@ class AsciiMode(str, Enum):
 @router.post("/convert")
 async def convert_image_to_ascii(
     file: UploadFile = File(...),
-    width: int = Form(100, description="Width of the output ASCII art"),
+    width: int = Form(
+        100, ge=1, le=500,
+        description="Width of the output ASCII art (1-500)"),
     color: bool = Form(
         False, description="Enable color output (ANSI escape codes)"),
     mode: AsciiMode = Form(
@@ -48,16 +51,11 @@ async def convert_image_to_ascii(
     """
     Convert an uploaded image to ASCII art.
     """
-    if file.content_type is None or not file.content_type.startswith("image/"):
-        # If content type is missing, we might want to allow it or check extension.
-        # For now, let's just log it and be lenient if it's missing, or strict.
-        # The error was AttributeError: 'NoneType' object has no attribute 'startswith'
-        # implying file.content_type was None.
-        if file.content_type is None:
-            pass  # Or check filename extension?
-        else:
-            raise HTTPException(
-                status_code=400, detail="File provided is not an image.")
+    # A missing content-type is tolerated (some clients omit it); an explicit
+    # non-image type is rejected.
+    if file.content_type is not None and not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400, detail="File provided is not an image.")
 
     try:
         contents = await file.read()
@@ -65,7 +63,9 @@ async def convert_image_to_ascii(
         ascii_art = image_to_ascii(
             image_stream, width=width, color=color, mode=mode.value)
         return {"ascii": ascii_art}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+    except ValueError:
+        # image_to_ascii raises ValueError for undecodable input.
+        raise HTTPException(status_code=400, detail="Invalid image file.")
+    except Exception:
+        logging.exception("itoa/convert failed")
+        raise HTTPException(status_code=500, detail="Conversion failed.")

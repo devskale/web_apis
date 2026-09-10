@@ -1,5 +1,6 @@
 import io
 import os
+import logging
 import tempfile
 import pdfplumber
 import pymupdf4llm
@@ -9,6 +10,8 @@ from auth import verify_token
 from typing import Literal
 
 router = APIRouter()
+
+MAX_PDF_BYTES = 10 * 1024 * 1024
 
 
 @router.post(
@@ -31,8 +34,14 @@ async def pdf_to_md(
     if not filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
+    # Reject oversized uploads before buffering the body in memory. size is
+    # known from the multipart parsing; the post-read check stays as a guard
+    # for clients that lie about it.
+    if file.size is not None and file.size > MAX_PDF_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 10MB)")
+
     data = await file.read()
-    if len(data) > 10 * 1024 * 1024:
+    if len(data) > MAX_PDF_BYTES:
         raise HTTPException(
             status_code=413, detail="File too large (max 10MB)")
 
@@ -49,9 +58,10 @@ async def pdf_to_md(
                     if text:
                         parts.append(text)
                 markdown = "\n\n".join(parts).strip()
-        except Exception as e:
+        except Exception:
+            logging.exception("pdf/to_md failed (pdfplumber)")
             raise HTTPException(
-                status_code=500, detail=f"pdfplumber error: {str(e)}")
+                status_code=500, detail="PDF processing failed.")
 
     elif method == "pymupdf4llm":
         try:
@@ -71,9 +81,10 @@ async def pdf_to_md(
             finally:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
-        except Exception as e:
+        except Exception:
+            logging.exception("pdf/to_md failed (pymupdf4llm)")
             raise HTTPException(
-                status_code=500, detail=f"pymupdf4llm error: {str(e)}")
+                status_code=500, detail="PDF processing failed.")
 
     if not markdown:
         raise HTTPException(status_code=422, detail="No text extracted")

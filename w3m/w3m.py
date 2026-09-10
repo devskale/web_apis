@@ -87,7 +87,7 @@ def get_numof_qresults(text: str) -> list:
             else:
                 # Handle non-numeric bracket content as needed
                 print(
-                    f"Warning: Non-numeric content found in brackets: {num} '{line}'")
+                    f"Warning: Non-numeric content found in brackets: '{line}'")
                 # You could skip this line or handle it differently
 
     return max_num

@@ -15,6 +15,8 @@ import logging
 from logging.handlers import RotatingFileHandler
 # --- Simple in-memory rate limiter for /firmenbuch ---
 from collections import defaultdict
+from urllib.parse import urlparse
+from fastapi.responses import JSONResponse
 import hashlib
 import time
 
@@ -36,26 +38,56 @@ def _mask_auth(header: str | None) -> str:
     return parts[0]
 
 _rate_store: dict[str, list[float]] = defaultdict(list)
-_RATE_LIMIT = 30  # requests per window
+_RATE_LIMIT = 30  # requests per window, per worker process
 _RATE_WINDOW = 60  # seconds
+_last_prune = 0.0
+
+
+def _rate_key(request: Request) -> str:
+    """One bucket per token; unauthenticated requests get a per-IP bucket so
+    they can't exhaust a single shared 'anonymous' bucket."""
+    auth = request.headers.get("Authorization")
+    if auth:
+        # Hash so raw credentials never sit in the store.
+        return "tok:" + hashlib.sha256(auth.encode("utf-8")).hexdigest()
+    client = request.client.host if request.client else "unknown"
+    return "ip:" + client
+
 
 def _check_rate_limit(key: str) -> bool:
     """Returns True if request is allowed, False if rate limited."""
     now = time.time()
-    # Clean old entries
-    _rate_store[key] = [t for t in _rate_store[key] if now - t < _RATE_WINDOW]
-    if len(_rate_store[key]) >= _RATE_LIMIT:
+    recent = [t for t in _rate_store[key] if now - t < _RATE_WINDOW]
+    if len(recent) >= _RATE_LIMIT:
+        _rate_store[key] = recent
         return False
-    _rate_store[key].append(now)
+    recent.append(now)
+    _rate_store[key] = recent
     return True
 
 
 def _prune_rate_store() -> None:
-    """Drop keys whose timestamp lists are now empty, so the store can't grow
-    without bound over time (matters on a low-RAM box)."""
-    stale = [k for k, ts in _rate_store.items() if not ts]
+    """Drop keys whose newest hit is older than the window, so the store can't
+    grow without bound over time (matters on a low-RAM box). Runs at most once
+    per window - timestamps are appended in order, so ts[-1] is the newest."""
+    global _last_prune
+    now = time.time()
+    if now - _last_prune < _RATE_WINDOW:
+        return
+    _last_prune = now
+    stale = [k for k, ts in _rate_store.items()
+             if not ts or now - ts[-1] >= _RATE_WINDOW]
     for k in stale:
         del _rate_store[k]
+
+
+def _validate_url(url: str) -> None:
+    """Reject anything that isn't a plain http(s) URL, so the text browsers
+    can't be pointed at file:// or other internal schemes."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(
+            status_code=400, detail="Only http(s) URLs are supported.")
 
 
 # Import auth and routers
@@ -102,18 +134,18 @@ app.add_middleware(
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     # Rate limit check for firmenbuch endpoints
+    limited = False
     if "/firmenbuch/" in request.url.path:
-        token = request.headers.get("Authorization", "anonymous")
-        if not _check_rate_limit(token):
-            from fastapi.responses import JSONResponse
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Rate limit exceeded. Max 30 requests per minute."},
-                headers={"Retry-After": "60"}
-            )
-
-    response = await call_next(request)
-    # Periodically prune emptied keys so the in-memory store can't leak.
+        limited = not _check_rate_limit(_rate_key(request))
+    if limited:
+        response = JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded. Max 30 requests per minute per token."},
+            headers={"Retry-After": "60"}
+        )
+    else:
+        response = await call_next(request)
+    # Periodically prune stale keys so the in-memory store can't leak.
     _prune_rate_store()
     log_data = {
         "client_ip": request.client.host,
@@ -139,6 +171,7 @@ def fetch_url(
         "w3m", description="Tool to use: w3m (default) or lynx."),
     token: str = Depends(verify_token)
 ):
+    _validate_url(url)
     try:
         if tool == "w3m":
             content = fetch_with_w3m(url, links=False)
@@ -153,7 +186,23 @@ def fetch_url(
             raise HTTPException(
                 status_code=400, detail="Invalid tool. Use 'w3m' or 'lynx'.")
     except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log the real cause server-side; don't echo internal error text.
+        logging.error("/fetch_url failed for %s: %s", url, e)
+        raise HTTPException(
+            status_code=502, detail="Upstream fetch failed.")
+
+
+@app.get("/lynx")
+def lynx_fetch(url: str, token: str = Depends(verify_token)):
+    _validate_url(url)
+    try:
+        content = lynx_url(url)
+    except RuntimeError as e:
+        logging.error("/lynx failed for %s: %s", url, e)
+        raise HTTPException(status_code=502, detail="Upstream fetch failed.")
+    if not content:
+        raise HTTPException(status_code=404, detail="No content found.")
+    return {"content": content}
 
 
 @app.get("/w3m_google")
@@ -162,7 +211,8 @@ def w3m_fetch(query: str, num_results: int = 10, domain: str = "at", token: str 
         content = duck_search_domain(query, num_results, domain)
         return {"content": content}
     except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error("/w3m_google failed for %r: %s", query, e)
+        raise HTTPException(status_code=502, detail="Search failed.")
 
 
 @app.get(
@@ -314,4 +364,6 @@ else:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    # Dev convenience only (production runs gunicorn behind nginx); bind to
+    # localhost so a stray dev run isn't reachable from the network.
+    uvicorn.run(app, host="127.0.0.1", port=8001)

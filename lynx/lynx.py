@@ -15,8 +15,10 @@ def lynx_url(url: str) -> str:
     try:
         # Run the Lynx command with the custom config file and a 15-second timeout
         result = subprocess.run(
-            [lynx_path, url, '-dump', '-cfg=', lynx_config_path, '--display_charset=utf-8', '-accept_all_cookies'],
-#            ['lynx',  url, '-dump', '--display_charset=utf-8'],
+            # '-cfg=PATH' must be a single argv token; split tokens would be
+            # treated as extra startfiles and the config would be ignored.
+            [lynx_path, '-dump', f'-cfg={lynx_config_path}',
+             '-display_charset=utf-8', '-accept_all_cookies', url],
             capture_output=True,
             text=True,
             check=True,
