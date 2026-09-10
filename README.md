@@ -823,7 +823,7 @@ The service is deployed on the `amd` host and fronted at `https://amd.skale.dev/
 
 This script runs **on the server** and will:
 1. `git pull` the **web_apis** repository into `/home/ubuntu/code/web_apis`
-2. Update Python dependencies (`pip install -r requirements.txt` inside `.venv`)
+2. Sync dependencies via `uv sync --frozen` (updates `.venv` exactly per `uv.lock`)
 3. Restart the `fastapi` systemd service
 
 > **⚠️ Deployment note — dynamically-loaded modules.** `firmenbuch` (the Austrian company register + crawl/cache/ÖNACE layer, repo [firmenbuch_AT](https://github.com/devskale/firmenbuch_AT)) and `electricity` are **separate repositories**, symlinked into the project root and listed in `.gitignore`. They are **not pulled by `deploy_api.sh`** — to update their endpoints you must update/symlink those repos separately on the server. A normal deploy only touches the local modules (echo, w3m, lynx, duck, pdf, itoa). If a module's symlink is missing at startup, FastAPI logs `"<module> not found"` and its endpoints are simply absent.
@@ -842,11 +842,18 @@ API access logs are stored in `api.log`.
 
 ## Prerequisites
 
-- Python 3.12+
-- Virtual environment (recommended)
-- Required packages (see requirements.txt)
+- [uv](https://docs.astral.sh/uv/) — manages Python (≥3.12) and the virtualenv itself
+- Dependencies are declared in `pyproject.toml` and pinned in `uv.lock` (no `requirements.txt`); `uv sync` recreates `.venv` exactly. Note: the symlinked modules below share this venv, so their runtime deps (psycopg2, httpx, reportlab, rich, bs4, …) are part of `pyproject.toml` too.
 - [firmenbuch_AT](https://github.com/devskale/firmenbuch_AT) — symlinked into project as `firmenbuch/` (gitignored; provides company register + crawl/cache + ÖNACE endpoints)
 - `electricity/` — separate module symlinked into project (gitignored; provides `/electricity/*` with its own auth)
+
+## Development
+
+```bash
+uv sync          # create .venv from uv.lock (includes dev group)
+uv run pytest    # offline unit tests
+TOKENS=devtoken uv run uvicorn main:app --reload   # local dev server on 127.0.0.1:8001
+```
 
 ## Configuration
 

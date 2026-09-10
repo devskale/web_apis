@@ -1,6 +1,7 @@
 #!/bin/bash
+set -e
 cd /home/ubuntu/code/web_apis
 git pull
-source .venv/bin/activate
-pip install -r requirements.txt
+export PATH="$HOME/.local/bin:$PATH"
+uv sync --frozen
 sudo systemctl restart fastapi

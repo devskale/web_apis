@@ -1,0 +1,33 @@
+[project]
+name = "web-apis"
+version = "1.1.0"
+description = "FastAPI service: web scraping, search, PDF/ASCII conversion, Austrian company & electricity data"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # core app
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "gunicorn>=21.2",
+    "python-dotenv>=1.0",
+    "python-multipart>=0.0.9",
+    # fetch/search endpoints
+    "ddgs>=9.0",
+    "requests>=2.31",
+    # converters
+    "pdfplumber>=0.11",
+    "pymupdf4llm>=0.0.17",
+    "pymupdf>=1.24",
+    "Pillow>=10.0",
+    # runtime deps of the symlinked modules that share this venv
+    # (firmenbuch AT incl. its lazy reportlab/rich usage, electricity)
+    "beautifulsoup4>=4.12",
+    "httpx>=0.27",
+    "psycopg2-binary>=2.9",
+    "reportlab>=4.0",
+    "rich>=13.0",
+    "click>=8.1",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
