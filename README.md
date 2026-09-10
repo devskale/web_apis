@@ -628,7 +628,7 @@ Resolve + crawl the corporate shareholders of `fn` so ownership edges become bid
 | 401 | Missing or invalid Bearer token |
 | 403 | HVD token rejected, or live crawl disabled (`CRAWL_API_ENABLED≠1`) |
 | 404 | Company not found, no search results, no changes in period |
-| 429 | Rate limit exceeded (`/firmenbuch/*`: 30 req/min per token) |
+| 429 | Rate limit exceeded (`/firmenbuch/*`: 30 req/min per token **per worker** — in-memory limiter, ~60/min effective with the current 2-worker unit) |
 | 502 | evi.gv.at or HVD upstream error |
 | 503 | HVD not configured (missing deps or token) |
 
@@ -636,7 +636,7 @@ Resolve + crawl the corporate shareholders of `fn` so ownership edges become bid
 
 ## Electricity (E-Control AT)
 
-> ⚠️ **Separate auth.** The `electricity` module validates its **own** Bearer token — the global `TOKENS` are rejected with `{"detail":"Invalid bearer token"}`. It is loaded dynamically from a separate `electricity` module (gitignored), like `firmenbuch_AT`.
+> ⚠️ **Separate auth.** The `electricity` module validates its **own** Bearer token (`STROM_TARIF_API_KEY`): no credentials → `401` (global gate), a global `TOKENS` value → `403` (module rejects it), the electricity key → `200`. It is loaded dynamically from a separate `electricity` module (gitignored), like `firmenbuch_AT`.
 
 Austrian electricity data: tariff lists and day-ahead spot-price charts.
 
@@ -681,9 +681,12 @@ Search for news articles with localization and filtering.
 | `topic` | string | ✅ | News search topic |
 | `region` | string | No | `at-at`, `de-de`, `wt-wt` (default) |
 | `safesearch` | string | No | `on`, `moderate`, `off` (default) |
-| `timelimit` | string | No | `d`, `w`, `m`, `y` |
+| `timelimit` | string | No | `d`, `w`, `m` (default), `y` |
 | `max_results` | int | No | Default: 8 |
-| `backend` | string | No | `auto`, `bing`, `duckduckgo`, `google`, etc. |
+| `page` | int | No | Results page number |
+| `backend` | string | No | `auto`, `bing`, `duckduckgo`, `yahoo`, ... |
+| `proxy` | string | No | Proxy URL passed to the search backend, e.g. `socks5h://127.0.0.1:9150` |
+| `verify` | bool | No | Verify SSL for backend requests (default `true`) |
 
 **Example:**
 ```bash
@@ -701,12 +704,17 @@ Text search with advanced filters. Supports operators: `site:`, `filetype:`, `in
 | `query` | string | ✅ | Search query |
 | `max_results` | int | No | Default: 25 |
 | `region` | string | No | Default: `wt-wt` |
+| `safesearch` | string | No | `on`, `moderate`, `off` (default) |
+| `timelimit` | string | No | `d`, `w`, `m`, `y` |
 | `site` | string | No | Restrict to domain |
 | `exact` | bool | No | Exact phrase match |
 | `exclude` | string | No | Comma-separated terms to exclude |
+| `page` | int | No | Results page number |
 | `filetype` | string | No | Filter by extension |
 | `inurl` | string | No | Filter by URL fragment |
 | `backend` | string | No | Search backend selection |
+| `proxy` | string | No | Proxy URL passed to the search backend |
+| `verify` | bool | No | Verify SSL for backend requests (default `true`) |
 
 **Example:**
 ```bash
@@ -729,7 +737,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 
 ### GET /echo
 
-Returns input text. Useful for health checks.
+Returns the input text, sanitized to letters, digits and whitespace (everything else is stripped). Useful for health checks.
 
 ```bash
 curl -H "Authorization: Bearer YOUR_TOKEN" "https://your-server/api/echo?text=ping"
@@ -737,21 +745,57 @@ curl -H "Authorization: Bearer YOUR_TOKEN" "https://your-server/api/echo?text=pi
 
 ### GET /fetch_url
 
-Fetch URL content using w3m or lynx.
+Fetch URL content using w3m or lynx. Only `http(s)` URLs are accepted (`file://` etc. return `400`); upstream failures return `502`.
 
 **Parameters:** `url` (required), `tool` (`w3m` or `lynx`, default: `w3m`)
 
 ### GET /w3m_google
 
-Google search via w3m with domain-specific results.
+Web search backed by **DuckDuckGo** (historical name — w3m is no longer used on this path), with region mapping per domain.
 
-**Parameters:** `query` (required), `num_results` (default: 10), `domain` (default: `at`)
+**Parameters:** `query` (required), `num_results` (default: 10), `domain` (`at` default, `de`, `com`)
 
 ### GET /lynx
 
-Fetch URL content using lynx browser.
+Fetch URL content using the lynx browser. Same `http(s)`-only rule as `/fetch_url`.
 
 **Parameters:** `url` (required)
+
+---
+
+## PDF Conversion
+
+### POST /pdf/to_md
+
+Convert a PDF (≤10MB, `413` above that) to Markdown-like text using `pymupdf4llm` (default) or `pdfplumber`. Scanned PDFs without OCR return `422` (no text extracted). Multipart upload:
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" -F file=@doc.pdf \
+  "https://your-server/api/pdf/to_md?method=pymupdf4llm"
+```
+
+**Response:** `{"filename", "converter", "pages", "chars", "markdown"}`
+
+## Image → ASCII
+
+### POST /itoa/convert
+
+Convert an uploaded image to ASCII art. Multipart upload with form fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | file | Image file |
+| `width` | int | Output width in characters (1–500, default 100) |
+| `color` | bool | ANSI true-color output (default `false`) |
+| `mode` | string | Palette name, e.g. `Standard`, `Blocks`, `Braille`, `Greek` (see app docs) |
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" -F file=@pic.png -F width=80 \
+  "https://your-server/api/itoa/convert"
+```
+
+**Response:** `{"ascii": "..."}`
+
 
 ---
 
@@ -817,7 +861,8 @@ The service runs on port 8001 and uses gunicorn with uvicorn workers for optimal
 
 ### Security
 
-- Authentication is required for all endpoints using Bearer tokens
-- Tokens are configured in the .env file and loaded at startup
-- CORS is configured to allow all origins (for development)
-- Rate limiting and input validation are implemented
+- Authentication is required for all endpoints using Bearer tokens; the app **fails closed** — with `TOKENS` missing or empty it refuses to start instead of disabling auth
+- Tokens are configured in the .env file and loaded at startup (only the token count is logged, never the values)
+- Token comparison is constant-time; bearer tokens are masked (short SHA-256 prefix) in access logs
+- CORS allows all origins (handy for dev; active in production too — but `allow_credentials=False`, and auth is header-based, so no credentials are exposed cross-site)
+- Rate limiting and input validation are implemented; the rate limiter is in-memory **per worker process** (see error table)
