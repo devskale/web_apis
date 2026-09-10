@@ -767,7 +767,7 @@ Fetch URL content using the lynx browser. Same `http(s)`-only rule as `/fetch_ur
 
 ### POST /pdf/to_md
 
-Convert a PDF (≤10MB **and** ≤500 pages, `413` above either) to Markdown-like text. Anything that isn't a valid PDF returns `400`; scanned PDFs without OCR return `422` (no text extracted) with the local converters. Local conversion runs in a killable child process — a pathological PDF (e.g. decompression bomb) returns `504` after ~60s instead of hanging the worker.
+Convert a PDF (≤10MB **and** ≤500 pages, `413` above either) to Markdown-like text. Anything that isn't a valid PDF returns `400`; scanned PDFs without OCR return `422` (no text extracted) with the local converter. Local conversion runs in a killable child process — a pathological PDF (e.g. decompression bomb) returns `504` after ~60s instead of hanging the worker.
 
 **Converters (`method`):**
 | `method` | Where | Notes |
@@ -775,13 +775,13 @@ Convert a PDF (≤10MB **and** ≤500 pages, `413` above either) to Markdown-lik
 | `pdfplumber` *(default)* | local | fast, text-layer PDFs, no OCR |
 | `llamaparse` | ☁️ LlamaCloud (US) | OCR + complex layouts (tables, multi-column); **the document is uploaded to an external service** |
 
-With `method=llamaparse` the optional `tier` param selects the LlamaParse mode: `fast` (default), `cost_effective`, `agentic`, `agentic_plus` — higher tiers cost more credits. Auth for LlamaParse comes from `LLAMA_CLOUD_API_KEY` (env/.env) with a credgoo `llamacloud` fallback. Error mapping: key missing → `503`, quota/rate limit → `429`, LlamaParse failure → `502`, job timeout → `504`.
+With `method=llamaparse` two optional params apply: `tier` selects the LlamaParse mode (`fast` default, `cost_effective`, `agentic`, `agentic_plus` — higher tiers cost more credits) and `language` the OCR language hint (ISO code, default `de`). Auth for LlamaParse comes from `LLAMA_CLOUD_API_KEY` (env/.env) with a credgoo `llamacloud` fallback. Error mapping: key missing → `503`, quota/rate limit → `429`, LlamaParse failure → `502`, job timeout → `504`.
 
 Multipart upload:
 
 ```bash
 curl -H "Authorization: Bearer YOUR_TOKEN" -F file=@doc.pdf \
-  "https://your-server/api/pdf/to_md?method=pymupdf4llm"
+  "https://your-server/api/pdf/to_md"
 
 curl -H "Authorization: Bearer YOUR_TOKEN" -F file=@scan.pdf \
   "https://your-server/api/pdf/to_md?method=llamaparse&tier=fast"
