@@ -1,10 +1,13 @@
 import io
+import json
 import logging
 import os
 import tempfile
+import time
 import pdfplumber
 import pymupdf4llm
 import fitz
+import httpx
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Query
 from auth import verify_token
 from typing import Literal
@@ -16,15 +19,129 @@ MAX_PDF_BYTES = 10 * 1024 * 1024
 # pathological PDF must not be able to take down the whole service.
 MAX_PDF_PAGES = 500
 
+LLAMA_PARSE_BASE = "https://api.cloud.llamaindex.ai"
+# Polling budget must stay under the 120s gunicorn worker timeout.
+LLAMA_POLL_TIMEOUT_S = 100
+_LLAMA_POLL_INTERVAL_S = 3
+LLAMA_TIERS = ("fast", "cost_effective", "agentic", "agentic_plus")
+
+
+def _llama_api_key() -> str:
+    """Resolve the LlamaCloud API key: env/.env first, credgoo fallback."""
+    key = os.getenv("LLAMA_CLOUD_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        from credgoo import get_api_key
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail=("LlamaParse not configured: set LLAMA_CLOUD_API_KEY "
+                    "(credgoo is not installed)."))
+    try:
+        key = (get_api_key("llamacloud") or "").strip()
+    except Exception:
+        logging.exception("credgoo llamacloud resolution failed")
+        key = ""
+    if not key:
+        raise HTTPException(
+            status_code=503,
+            detail=("LlamaParse not configured: set LLAMA_CLOUD_API_KEY or "
+                    "set up credgoo service 'llamacloud'."))
+    return key
+
+
+def _llamaparse_to_markdown(
+    data: bytes,
+    filename: str,
+    tier: str,
+    client: httpx.Client | None = None,
+) -> str:
+    """Upload to LlamaParse, poll the job, return the full markdown.
+
+    v2 API: POST /parse/upload -> GET /parse/{id} (poll) -> expand=markdown_full.
+    """
+    headers = {"Authorization": f"Bearer {_llama_api_key()}"}
+    own_client = client is None
+    if own_client:
+        client = httpx.Client(timeout=30)
+    try:
+        resp = client.post(
+            f"{LLAMA_PARSE_BASE}/api/v2/parse/upload",
+            headers=headers,
+            files={"file": (filename, data, "application/pdf")},
+            data={"configuration": json.dumps({"tier": tier, "version": "latest"})},
+        )
+        if resp.status_code in (401, 403):
+            logging.error("llamaparse rejected the API key: %s %s",
+                          resp.status_code, resp.text[:200])
+            raise HTTPException(
+                status_code=502, detail="LlamaParse rejected the API key.")
+        if resp.status_code in (402, 429):
+            raise HTTPException(
+                status_code=429, detail="LlamaParse quota or rate limit exhausted.")
+        if resp.status_code >= 400:
+            logging.error("llamaparse upload failed: %s %s",
+                          resp.status_code, resp.text[:200])
+            raise HTTPException(
+                status_code=502, detail="LlamaParse upload failed.")
+        job_id = resp.json().get("id")
+        if not job_id:
+            raise HTTPException(
+                status_code=502, detail="LlamaParse returned no job id.")
+
+        deadline = time.monotonic() + LLAMA_POLL_TIMEOUT_S
+        while True:
+            time.sleep(_LLAMA_POLL_INTERVAL_S)
+            check = client.get(
+                f"{LLAMA_PARSE_BASE}/api/v2/parse/{job_id}", headers=headers)
+            if check.status_code >= 400:
+                logging.error("llamaparse status check failed: %s %s",
+                              check.status_code, check.text[:200])
+                raise HTTPException(
+                    status_code=502, detail="LlamaParse job status failed.")
+            body = check.json()
+            # v2 nests job fields on GET; accept both shapes defensively.
+            status = body.get("status") or body.get("job", {}).get("status")
+            if status == "COMPLETED":
+                break
+            if status in ("FAILED", "CANCELLED"):
+                error = (body.get("error_message")
+                         or body.get("job", {}).get("error_message") or "")
+                logging.error("llamaparse job %s ended %s: %s",
+                              job_id, status, error)
+                raise HTTPException(
+                    status_code=502, detail="LlamaParse job failed.")
+            if time.monotonic() > deadline:
+                raise HTTPException(
+                    status_code=504, detail="LlamaParse job timed out.")
+
+        result = client.get(
+            f"{LLAMA_PARSE_BASE}/api/v2/parse/{job_id}",
+            headers=headers,
+            params={"expand": "markdown_full"},
+        )
+        if result.status_code >= 400:
+            logging.error("llamaparse result fetch failed: %s %s",
+                          result.status_code, result.text[:200])
+            raise HTTPException(
+                status_code=502, detail="LlamaParse result fetch failed.")
+        return (result.json().get("markdown_full") or "").strip()
+    finally:
+        if own_client:
+            client.close()
+
 
 @router.post(
     "/to_md",
     tags=["PDF"],
     summary="Convert PDF to Markdown-like text",
     description=(
-        "Extracts text from a PDF using the specified converter (pymupdf4llm or pdfplumber). "
-        "Limits: 10MB and 500 pages. Scanned PDFs without OCR will not yield text. "
-        "Returns markdown content and statistics."),
+        "Extracts text from a PDF using the specified converter: pymupdf4llm (default, "
+        "local, no OCR), pdfplumber (local), or llamaparse (LlamaParse cloud service - "
+        "handles OCR and complex layouts; the document is uploaded to LlamaCloud). "
+        "Limits: 10MB and 500 pages. Scanned PDFs without OCR will not yield text "
+        "with the local converters. Returns markdown content and statistics."),
 )
 # Deliberately a sync endpoint: the conversion is CPU-bound, and FastAPI runs
 # sync endpoints in the threadpool - an async def here would block the worker's
@@ -32,8 +149,13 @@ MAX_PDF_PAGES = 500
 def pdf_to_md(
     file: UploadFile = File(...,
                             description="PDF file (≤10MB, ≤500 pages) to convert to Markdown-like text."),
-    method: Literal["pymupdf4llm", "pdfplumber"] = Query(
-        "pymupdf4llm", description="Converter to use: 'pymupdf4llm' (default) or 'pdfplumber'."),
+    method: Literal["pymupdf4llm", "pdfplumber", "llamaparse"] = Query(
+        "pymupdf4llm",
+        description="Converter: 'pymupdf4llm' (default, local), 'pdfplumber' (local), "
+                    "or 'llamaparse' (cloud, OCR + complex layouts)."),
+    tier: Literal["fast", "cost_effective", "agentic", "agentic_plus"] = Query(
+        "fast",
+        description="LlamaParse tier; only used with method=llamaparse."),
     token: str = Depends(verify_token),
 ):
     filename = file.filename or ""
@@ -98,6 +220,10 @@ def pdf_to_md(
             logging.exception("pdf/to_md failed (pymupdf4llm)")
             raise HTTPException(
                 status_code=500, detail="PDF processing failed.")
+
+    elif method == "llamaparse":
+        # Cloud parsing: the document leaves this server (LlamaCloud, US).
+        markdown = _llamaparse_to_markdown(data, filename, tier)
 
     if not markdown:
         raise HTTPException(status_code=422, detail="No text extracted")

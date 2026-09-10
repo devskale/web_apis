@@ -767,11 +767,25 @@ Fetch URL content using the lynx browser. Same `http(s)`-only rule as `/fetch_ur
 
 ### POST /pdf/to_md
 
-Convert a PDF (≤10MB **and** ≤500 pages, `413` above either) to Markdown-like text using `pymupdf4llm` (default) or `pdfplumber`. Anything that isn't a valid PDF returns `400`; scanned PDFs without OCR return `422` (no text extracted). Multipart upload:
+Convert a PDF (≤10MB **and** ≤500 pages, `413` above either) to Markdown-like text. Anything that isn't a valid PDF returns `400`; scanned PDFs without OCR return `422` (no text extracted) with the local converters.
+
+**Converters (`method`):**
+| `method` | Where | Notes |
+|----------|-------|-------|
+| `pymupdf4llm` *(default)* | local | fast, text-layer PDFs, no OCR |
+| `pdfplumber` | local | text-layer PDFs |
+| `llamaparse` | ☁️ LlamaCloud (US) | OCR + complex layouts (tables, multi-column); **the document is uploaded to an external service** |
+
+With `method=llamaparse` the optional `tier` param selects the LlamaParse mode: `fast` (default), `cost_effective`, `agentic`, `agentic_plus` — higher tiers cost more credits. Auth for LlamaParse comes from `LLAMA_CLOUD_API_KEY` (env/.env) with a credgoo `llamacloud` fallback. Error mapping: key missing → `503`, quota/rate limit → `429`, LlamaParse failure → `502`, job timeout → `504`.
+
+Multipart upload:
 
 ```bash
 curl -H "Authorization: Bearer YOUR_TOKEN" -F file=@doc.pdf \
   "https://your-server/api/pdf/to_md?method=pymupdf4llm"
+
+curl -H "Authorization: Bearer YOUR_TOKEN" -F file=@scan.pdf \
+  "https://your-server/api/pdf/to_md?method=llamaparse&tier=fast"
 ```
 
 **Response:** `{"filename", "converter", "pages", "chars", "markdown"}`
