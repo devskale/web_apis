@@ -5,12 +5,16 @@ import multiprocessing
 import os
 import queue as queue_mod
 import resource
-import tempfile
+import secrets
+import threading
 import time
+from datetime import datetime, timezone
 import pdfplumber
 import fitz
 import httpx
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Query
+import requests
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Query, Request
+from fastapi.responses import JSONResponse
 from auth import verify_token
 from typing import Literal
 
@@ -34,6 +38,72 @@ LLAMA_PARSE_BASE = "https://api.cloud.llamaindex.ai"
 LLAMA_POLL_TIMEOUT_S = 100
 _LLAMA_POLL_INTERVAL_S = 3
 LLAMA_TIERS = ("fast", "cost_effective", "agentic", "agentic_plus")
+
+# ── Async jobs (llamaparse only) ──
+# amd is a ~1GB box: ONE llamaparse job at a time, a small queue, and results
+# that leave memory as soon as they are transferred to throway.
+PDF_ASYNC_PAGES = 40          # llamaparse beyond this is auto-async (~2s/page)
+JOB_TTL_S = 2 * 3600          # done/failed jobs are evicted after 2h
+MAX_JOBS = 10                 # queued+running+done; beyond -> 429
+LLAMA_JOB_SLOTS = 1           # concurrent llamaparse conversions
+THROWAY_URL = "https://skale.dev/throway/"
+THROWAY_TTL_S = 14400         # 4h, per throway contract
+THROWAY_TIMEOUT_S = 60
+
+_jobs: dict = {}
+_jobs_lock = threading.Lock()
+_llama_slots = threading.Semaphore(LLAMA_JOB_SLOTS)
+
+
+def _purge_jobs() -> None:
+    """Drop expired jobs (called with _jobs_lock held)."""
+    now = time.time()
+    for jid in [j for j, job in _jobs.items() if now - job["created_ts"] > JOB_TTL_S]:
+        _jobs.pop(jid, None)
+
+
+def _throway_upload(markdown: str, name: str) -> str:
+    safe = os.path.basename(name or "result.md") or "result.md"
+    if not safe.lower().endswith(".md"):
+        safe += ".md"
+    resp = requests.post(
+        THROWAY_URL,
+        params={"name": safe},
+        data=markdown.encode("utf-8"),
+        headers={"Content-Type": "text/markdown; charset=utf-8"},
+        timeout=THROWAY_TIMEOUT_S,
+    )
+    resp.raise_for_status()
+    return resp.json()["url"]
+
+
+def _run_llama_job(job_id: str, data: bytes, filename: str, tier: str,
+                   language: str, transfer: str) -> None:
+    """Background worker: poll llamaparse (I/O only), then optionally hand the
+    result to throway. Markdown is dropped from memory after a successful
+    transfer - the box is small."""
+    job = _jobs[job_id]
+    with _llama_slots:
+        job["status"] = "running"
+        try:
+            markdown = _llamaparse_to_markdown(
+                data, filename, tier, language)
+        except Exception as e:
+            job["status"] = "failed"
+            job["error"] = f"{type(e).__name__}: {e}"
+            return
+        del data
+        job["chars"] = len(markdown)
+        if transfer == "throway":
+            try:
+                job["markdown_url"] = _throway_upload(markdown, filename)
+                job["transfer"] = "throway"
+                markdown = ""  # transferred: don't hold it in memory
+            except Exception as e:
+                logging.error("throway upload failed for job %s: %s", job_id, e)
+                job["transfer_error"] = f"{type(e).__name__}: {e}"
+        job["markdown"] = markdown
+        job["status"] = "done"
 
 
 def _convert_local(data: bytes, method: str, out_q) -> None:
@@ -61,6 +131,14 @@ def _convert_local(data: bytes, method: str, out_q) -> None:
             out_q.put(("ok", "\n\n".join(parts).strip()))
     except Exception as e:
         out_q.put(("error", f"{type(e).__name__}: {e}"))
+
+
+def _public_base(request: Request) -> str:
+    """Public base URL (behind nginx the worker doesn't honor proxy headers
+    for base_url, so reconstruct it from forwarded headers + root_path)."""
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}{request.scope.get('root_path', '')}"
 
 
 def _llama_api_key() -> str:
@@ -207,6 +285,15 @@ def pdf_to_md(
     language: str = Query(
         "de",
         description="OCR language hint (ISO code); only used with method=llamaparse."),
+    wait: bool = Query(
+        True,
+        description="llamaparse only: false returns 202 + job_id immediately; "
+                    "poll /pdf/jobs/{job_id}. Forced for documents beyond ~40 pages."),
+    transfer: Literal["inline", "throway"] = Query(
+        "inline",
+        description="throway: result is uploaded to skale.dev/throway (4h TTL) and "
+                    "only the link is returned — keeps responses small."),
+    request: Request = None,
     token: str = Depends(verify_token),
 ):
     filename = file.filename or ""
@@ -274,10 +361,48 @@ def pdf_to_md(
 
     elif method == "llamaparse":
         # Cloud parsing: the document leaves this server (LlamaCloud, US).
+        # Long documents must run as a background job: the sync request would
+        # die at gunicorn's 120s timeout (~2s/page measured).
+        if page_count > PDF_ASYNC_PAGES or not wait:
+            with _jobs_lock:
+                _purge_jobs()
+                if len(_jobs) >= MAX_JOBS:
+                    raise HTTPException(
+                        status_code=429, headers={"Retry-After": "60"},
+                        detail="Too many jobs queued; retry later.")
+                job_id = secrets.token_urlsafe(12)
+                _jobs[job_id] = {
+                    "job_id": job_id, "status": "queued",
+                    "created_ts": time.time(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "pages": page_count, "method": "llamaparse", "tier": tier,
+                }
+            threading.Thread(
+                target=_run_llama_job,
+                args=(job_id, data, filename, tier, language, transfer),
+                daemon=True).start()
+            return JSONResponse(status_code=202, content={
+                "job_id": job_id, "status": "queued", "pages": page_count,
+                "poll": _public_base(request) + f"/pdf/jobs/{job_id}",
+                "auto_async": page_count > PDF_ASYNC_PAGES,
+            })
         markdown = _llamaparse_to_markdown(data, filename, tier, language)
 
     if not markdown:
         raise HTTPException(status_code=422, detail="No text extracted")
+
+    if transfer == "throway":
+        try:
+            url = _throway_upload(markdown, filename)
+        except Exception as e:
+            logging.error("throway transfer failed: %s", e)
+            raise HTTPException(
+                status_code=502, detail="throway transfer failed.")
+        return {
+            "filename": filename, "converter": method,
+            "pages": page_count, "chars": len(markdown),
+            "markdown_url": url, "expires_in": THROWAY_TTL_S,
+        }
 
     return {
         "filename": filename,
@@ -286,3 +411,25 @@ def pdf_to_md(
         "chars": len(markdown),
         "markdown": markdown
     }
+
+
+@router.get("/jobs/{job_id}", tags=["PDF"],
+            summary="Status/result of an async pdf conversion job")
+def pdf_job_status(job_id: str, token: str = Depends(verify_token)):
+    with _jobs_lock:
+        _purge_jobs()
+        job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Unknown or expired job")
+    out = {k: job.get(k) for k in
+           ("job_id", "status", "created_at", "pages", "chars")}
+    out["expires_in"] = max(0, int(JOB_TTL_S - (time.time() - job["created_ts"])))
+    if job["status"] == "failed":
+        out["error"] = job.get("error", "")
+    if job["status"] == "done":
+        if job.get("markdown_url"):
+            out["markdown_url"] = job["markdown_url"]
+            out["expires_in"] = THROWAY_TTL_S
+        else:
+            out["markdown"] = job.get("markdown", "")
+    return out
