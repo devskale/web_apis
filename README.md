@@ -783,6 +783,8 @@ With `method=llamaparse` these optional params apply: `tier` selects the LlamaPa
 
 **Async jobs:** llamaparse documents beyond **~40 pages** are auto-converted as background jobs (a sync request would die at the 120s worker timeout — llamaparse runs at ~2s/page); `wait=false` forces it for any size. Async answer is `202` with `{"job_id", "status", "poll"}`; poll `GET /pdf/jobs/{job_id}` (same Bearer auth) until `status: done|failed`. Jobs are ephemeral (in-memory, evicted after 2h, gone on service restart), **max 1 llamaparse conversion at a time**, more than 10 jobs → `429`.
 
+**No job zombies:** every job carries a hard deadline — default **20 minutes** (`PDF_JOB_DEADLINE_MIN` env). It's enforced at three points: the worker won't wait for the conversion slot past it, it aborts before writing results past it, and any status read flips an overdue queued/running job to `failed` (`"error": "auto-killed: …"`). Job files are evicted after 2h; results shared via throway expire independently after 4h.
+
 **`transfer=throway`:** the markdown is uploaded to [skale.dev/throway](https://skale.dev/throway) (4h TTL, 5MB cap) and the response contains only `markdown_url` + `expires_in` instead of the full text — recommended for large documents. Auth for LlamaParse comes from `LLAMA_CLOUD_API_KEY` (env/.env) with a credgoo `llamacloud` fallback. Error mapping: key missing → `503`, quota/rate limit → `429`, LlamaParse failure → `502`, job timeout → `504`.
 
 Multipart upload:

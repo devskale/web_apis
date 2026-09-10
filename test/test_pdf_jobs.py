@@ -120,3 +120,29 @@ def test_throway_disabled_503(monkeypatch):
         headers=TOKEN, files={"file": ("a.pdf", _pdf(1), "application/pdf")})
     assert r.status_code == 503
     assert "disabled" in r.json()["detail"]
+
+
+def test_reader_kills_overdue_job():
+    """A hung worker (job stuck in running past its deadline) is flipped to
+    failed by the next status read - no zombie state survives a poll."""
+    import time as _t
+    jid = "overduejob123"
+    job = {"job_id": jid, "status": "running", "created_ts": _t.time() - 9999,
+           "created_at": "x", "deadline_ts": _t.time() - 900, "pages": 5,
+           "_path": pdf_router._job_path(jid)}
+    pdf_router._save_job(job)
+    body = client.get(f"/pdf/jobs/{jid}", headers=TOKEN).json()
+    assert body["status"] == "failed"
+    assert "auto-killed" in body["error"]
+
+
+def test_worker_autokills_when_queued_too_long(monkeypatch):
+    """deadline in the past at creation -> worker fails the job immediately
+    instead of waiting for the conversion slot."""
+    monkeypatch.setattr(pdf_router, "JOB_DEADLINE_S", -60)
+    r = client.post("/pdf/to_md?method=llamaparse&wait=false", headers=TOKEN,
+                    files={"file": ("a.pdf", _pdf(1), "application/pdf")})
+    assert r.status_code == 202
+    done = _wait_done(r.json()["job_id"])
+    assert done["status"] == "failed"
+    assert "auto-killed" in done["error"]

@@ -57,6 +57,17 @@ THROWAY_TIMEOUT_S = 60
 # (transfer=throway then answers 503). Default: enabled.
 THROWAY_ENABLED = os.getenv("THROWAY_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 
+# ── Anti-zombie guarantees ──
+# Every job has a hard deadline from creation. It is enforced at three points:
+# 1. the worker won't wait for the conversion slot past the deadline,
+# 2. the worker aborts before writing results past the deadline,
+# 3. a status read flips overdue queued/running jobs to failed (self-healing,
+#    covers a thread that hangs hard). Job FILES are evicted after JOB_TTL_S.
+try:
+    JOB_DEADLINE_S = int(os.getenv("PDF_JOB_DEADLINE_MIN", "20")) * 60
+except ValueError:
+    JOB_DEADLINE_S = 20 * 60
+
 JOBS_DIR = os.path.join(os.path.dirname(__file__), "data", "pdf_jobs")
 os.makedirs(JOBS_DIR, exist_ok=True)
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -88,21 +99,34 @@ def _load_job(job_id: str):
 
 
 def _purge_jobs() -> None:
-    """Unlink expired job files (opportunistic; atomic writes make this safe
-    across the two workers)."""
+    """Unlink expired job files and orphaned .tmp leftovers (opportunistic;
+    atomic writes make this safe across the two workers)."""
     now = time.time()
     try:
         for name in os.listdir(JOBS_DIR):
-            if not name.endswith(".json"):
-                continue
             p = os.path.join(JOBS_DIR, name)
             try:
-                if now - os.path.getmtime(p) > JOB_TTL_S:
+                if name.endswith(".tmp") or now - os.path.getmtime(p) > JOB_TTL_S:
                     os.unlink(p)
             except OSError:
                 pass
     except OSError:
         pass
+
+
+def _deadline_hit(job: dict) -> bool:
+    return time.time() > job.get("deadline_ts", 0)
+
+
+def _kill_overdue(job: dict) -> bool:
+    """Flip an overdue queued/running job to failed (reader-side auto-kill).
+    Returns True if the job was killed by this call."""
+    if job.get("status") in ("queued", "running") and _deadline_hit(job):
+        job["status"] = "failed"
+        job["error"] = "auto-killed: job exceeded its deadline"
+        _save_job(job)
+        return True
+    return False
 
 
 def _count_jobs() -> int:
@@ -131,9 +155,29 @@ def _run_llama_job(job_id: str, data: bytes, filename: str, tier: str,
                    language: str, transfer: str) -> None:
     """Background worker: poll llamaparse (I/O only), then optionally hand the
     result to throway. The markdown never lingers in memory - it goes straight
-    to the job file / throway."""
+    to the job file / throway. Every stage checks the hard job deadline so no
+    zombie job or thread survives it."""
     job = _load_job(job_id)
-    with _llama_slots:
+
+    # 1. never wait for the conversion slot past the deadline
+    acquired = False
+    while not _deadline_hit(job):
+        if _llama_slots.acquire(timeout=5):
+            acquired = True
+            break
+    if not acquired:
+        job["status"] = "failed"
+        job["error"] = "auto-killed: queued too long (deadline exceeded)"
+        _save_job(job)
+        return
+    try:
+        # 2. the conversion itself is bounded (LLAMA_POLL_TIMEOUT_S); abort
+        #    before writing results past the deadline
+        if _deadline_hit(job):
+            job["status"] = "failed"
+            job["error"] = "auto-killed: deadline exceeded before conversion"
+            _save_job(job)
+            return
         job["status"] = "running"
         _save_job(job)
         try:
@@ -145,6 +189,11 @@ def _run_llama_job(job_id: str, data: bytes, filename: str, tier: str,
             _save_job(job)
             return
         del data
+        if _deadline_hit(job):
+            job["status"] = "failed"
+            job["error"] = "auto-killed: deadline exceeded after conversion"
+            _save_job(job)
+            return
         job["chars"] = len(markdown)
         if transfer == "throway":
             try:
@@ -157,6 +206,8 @@ def _run_llama_job(job_id: str, data: bytes, filename: str, tier: str,
         job["markdown"] = markdown
         job["status"] = "done"
         _save_job(job)
+    finally:
+        _llama_slots.release()
 
 
 def _convert_local(data: bytes, method: str, out_q) -> None:
@@ -431,6 +482,7 @@ def pdf_to_md(
                 "job_id": job_id, "status": "queued",
                 "created_ts": time.time(),
                 "created_at": datetime.now(timezone.utc).isoformat(),
+                "deadline_ts": time.time() + JOB_DEADLINE_S,
                 "pages": page_count, "method": "llamaparse", "tier": tier,
                 "_path": _job_path(job_id),
             }
@@ -482,6 +534,9 @@ def pdf_job_status(job_id: str, token: str = Depends(verify_token)):
            ("job_id", "status", "created_at", "pages", "chars")}
     out["expires_in"] = max(0, int(JOB_TTL_S - (time.time() - job["created_ts"])))
     if job["status"] == "failed":
+        out["error"] = job.get("error", "")
+    elif job["status"] in ("queued", "running") and _kill_overdue(job):
+        out["status"] = "failed"
         out["error"] = job.get("error", "")
     if job["status"] == "done":
         if job.get("markdown_url"):
