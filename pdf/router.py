@@ -256,7 +256,9 @@ def pdf_to_md(
         # Watchdog: the conversion runs in a killable child. A pathological
         # PDF (decompression bomb, huge stream) gets 504 at the deadline
         # instead of tying the worker up until gunicorn's 120s kill.
-        ctx = multiprocessing.get_context("fork")
+        # spawn (not fork): forking from a request thread of a threaded
+        # worker inherits held locks and deadlocks the child.
+        ctx = multiprocessing.get_context("spawn")
         out_q = ctx.Queue()
         proc = ctx.Process(
             target=_convert_local, args=(data, method, out_q), daemon=True)
