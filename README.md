@@ -787,7 +787,18 @@ With `method=llamaparse` these optional params apply: `tier` selects the LlamaPa
 
 **RAM discipline** (the box has ~1GB): queued async jobs spill their upload payload to disk (zero heap while waiting), the worker reads bytes only while holding the single conversion slot, explicit `gc.collect()` returns big buffers immediately, and throway-transferred results are dropped from memory. Local (pdfplumber) conversion runs in a child process capped at 1GB address space; the systemd unit caps the whole service at `MemoryMax=400M`.
 
-**`transfer=throway`:** the markdown is uploaded to [skale.dev/throway](https://skale.dev/throway) (4h TTL, 5MB cap) and the response contains only `markdown_url` + `expires_in` instead of the full text — recommended for large documents. Auth for LlamaParse comes from `LLAMA_CLOUD_API_KEY` (env/.env) with a credgoo `llamacloud` fallback. Error mapping: key missing → `503`, quota/rate limit → `429`, LlamaParse failure → `502`, job timeout → `504`.
+**`transfer=throway`:** the markdown is uploaded to [skale.dev/throway](https://skale.dev/throway) (4h TTL, 5MB cap) and the response contains only `markdown_url` + `expires_in` instead of the full text — recommended for large documents. Auth for LlamaParse comes from `LLAMA_CLOUD_API_KEY` (env/.env) with a credgoo `llamacloud` fallback. Error mapping: key missing → `503`, quota/rate limit → `429`, LlamaParse failure → `502`, job timeout → `504`. The transfer target can be disabled per deployment with `THROWAY_ENABLED=0` (then `transfer=throway` answers `503`).
+
+#### GET /pdf/jobs/{job_id}
+
+Status/result of an async conversion job (same Bearer auth).
+
+```json
+{"job_id": "…", "status": "done", "created_at": "…", "pages": 23, "chars": 53689,
+ "expires_in": 14400, "markdown_url": "https://skale.dev/throway/…"}
+```
+
+`status`: `queued` → `running` → `done` | `failed`. On `done`: `markdown` (inline) or `markdown_url` (with `transfer=throway`). On `failed`: `error` — including `"auto-killed: …"` when the job exceeded its deadline.
 
 Multipart upload:
 
@@ -893,6 +904,10 @@ The service runs on port 8001 and uses gunicorn with uvicorn workers for optimal
 |----------|----------|-------------|
 | `TOKENS` | ✅ | Comma-separated Bearer tokens |
 | `HVDAT_TOKEN` | For HVD endpoints | BMJ HVD API token (or configure credgoo) |
+| `LLAMA_CLOUD_API_KEY` | For llamaparse | LlamaParse key (credgoo `llamacloud` fallback) |
+| `THROWAY_ENABLED` | No | `0` disables `transfer=throway` (default: enabled) |
+| `PDF_JOB_DEADLINE_MIN` | No | Hard async-job deadline in minutes (default: 20) |
+| `STROM_TARIF_API_KEY` | For electricity | E-Control API key (electricity module auth) |
 
 ### Security
 
