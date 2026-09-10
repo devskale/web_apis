@@ -779,16 +779,23 @@ Convert a PDF (≤10MB **and** ≤500 pages, `413` above either) to Markdown-lik
 | `pdfplumber` *(default)* | local | fast, text-layer PDFs, no OCR |
 | `llamaparse` | ☁️ LlamaCloud (US) | OCR + complex layouts (tables, multi-column); **the document is uploaded to an external service** |
 
-With `method=llamaparse` two optional params apply: `tier` selects the LlamaParse mode (`fast` default, `cost_effective`, `agentic`, `agentic_plus` — higher tiers cost more credits) and `language` the OCR language hint (ISO code, default `de`). Auth for LlamaParse comes from `LLAMA_CLOUD_API_KEY` (env/.env) with a credgoo `llamacloud` fallback. Error mapping: key missing → `503`, quota/rate limit → `429`, LlamaParse failure → `502`, job timeout → `504`.
+With `method=llamaparse` these optional params apply: `tier` selects the LlamaParse mode (`fast` default, `cost_effective`, `agentic`, `agentic_plus` — higher tiers cost more credits), `language` the OCR language hint (ISO code, default `de`), **`wait`** (default `true`) and **`transfer`** (`inline` default, `throway`).
+
+**Async jobs:** llamaparse documents beyond **~40 pages** are auto-converted as background jobs (a sync request would die at the 120s worker timeout — llamaparse runs at ~2s/page); `wait=false` forces it for any size. Async answer is `202` with `{"job_id", "status", "poll"}`; poll `GET /pdf/jobs/{job_id}` (same Bearer auth) until `status: done|failed`. Jobs are ephemeral (in-memory, evicted after 2h, gone on service restart), **max 1 llamaparse conversion at a time**, more than 10 jobs → `429`.
+
+**`transfer=throway`:** the markdown is uploaded to [skale.dev/throway](https://skale.dev/throway) (4h TTL, 5MB cap) and the response contains only `markdown_url` + `expires_in` instead of the full text — recommended for large documents. Auth for LlamaParse comes from `LLAMA_CLOUD_API_KEY` (env/.env) with a credgoo `llamacloud` fallback. Error mapping: key missing → `503`, quota/rate limit → `429`, LlamaParse failure → `502`, job timeout → `504`.
 
 Multipart upload:
 
 ```bash
+# small document, sync:
 curl -H "Authorization: Bearer YOUR_TOKEN" -F file=@doc.pdf \
   "https://your-server/api/pdf/to_md"
 
+# large scan: async job + result as throway link
 curl -H "Authorization: Bearer YOUR_TOKEN" -F file=@scan.pdf \
-  "https://your-server/api/pdf/to_md?method=llamaparse&tier=fast"
+  "https://your-server/api/pdf/to_md?method=llamaparse&wait=false&transfer=throway"
+# → {"job_id": "...", "poll": "https://your-server/api/pdf/jobs/..."} → GET poll → markdown_url
 ```
 
 **Response:** `{"filename", "converter", "pages", "chars", "markdown"}`
