@@ -885,6 +885,8 @@ The service runs on port 8001 and uses gunicorn with uvicorn workers for optimal
 
 ### Security
 
+> **⚠️ This repo is PUBLIC — never commit credentials.** No tokens, keys, or `.env` files belong in this repository (`.gitignore` covers `*.env` / `*.log*`). Tokens are configured server-side in `.env` or distributed via credgoo (`FETCH_URL_BEARER` etc.) — never hardcoded. Note: secrets from old commits remain in git history; history rewrites don't reliably un-leak them — rotate instead.
+
 - Authentication is required for all endpoints using Bearer tokens; the app **fails closed** — with `TOKENS` missing or empty it refuses to start instead of disabling auth
 - Tokens are configured in the .env file and loaded at startup (only the token count is logged, never the values)
 - Token comparison is constant-time; bearer tokens are masked (short SHA-256 prefix) in access logs
