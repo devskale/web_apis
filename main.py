@@ -16,7 +16,7 @@ from logging.handlers import RotatingFileHandler
 # --- Simple in-memory rate limiter for /firmenbuch ---
 from collections import defaultdict
 from urllib.parse import urlparse
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 import hashlib
 import time
 
@@ -159,6 +159,13 @@ async def log_requests(request: Request, call_next):
 
 
 @app.get("/", include_in_schema=False)
+def root(request: Request):
+    """Browsers land on the Swagger UI; API clients get the JSON help."""
+    if "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse(str(request.url).rstrip("/") + "/docs")
+    return help_(request)
+
+
 @app.get("/help", include_in_schema=False)
 def help_(request: Request):
     """Agent-friendly discovery endpoint: how to authenticate, where the
