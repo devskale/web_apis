@@ -4,6 +4,7 @@ import logging
 import multiprocessing
 import os
 import queue as queue_mod
+import re
 import resource
 import secrets
 import threading
@@ -42,6 +43,9 @@ LLAMA_TIERS = ("fast", "cost_effective", "agentic", "agentic_plus")
 # ── Async jobs (llamaparse only) ──
 # amd is a ~1GB box: ONE llamaparse job at a time, a small queue, and results
 # that leave memory as soon as they are transferred to throway.
+# Job state lives in JSON FILES under data/pdf_jobs/, not in memory: gunicorn
+# runs 2 workers and polls must round-trip between them. Files also make jobs
+# survive restarts and keep big markdown strings off the heap until requested.
 PDF_ASYNC_PAGES = 40          # llamaparse beyond this is auto-async (~2s/page)
 JOB_TTL_S = 2 * 3600          # done/failed jobs are evicted after 2h
 MAX_JOBS = 10                 # queued+running+done; beyond -> 429
@@ -50,16 +54,59 @@ THROWAY_URL = "https://skale.dev/throway/"
 THROWAY_TTL_S = 14400         # 4h, per throway contract
 THROWAY_TIMEOUT_S = 60
 
-_jobs: dict = {}
-_jobs_lock = threading.Lock()
-_llama_slots = threading.Semaphore(LLAMA_JOB_SLOTS)
+JOBS_DIR = os.path.join(os.path.dirname(__file__), "data", "pdf_jobs")
+os.makedirs(JOBS_DIR, exist_ok=True)
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+_llama_slots = threading.BoundedSemaphore(LLAMA_JOB_SLOTS)
+
+
+def _job_path(job_id: str) -> str:
+    if not _JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="Unknown or expired job")
+    return os.path.join(JOBS_DIR, job_id + ".json")
+
+
+def _save_job(job: dict) -> None:
+    tmp = job["_path"] + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({k: v for k, v in job.items() if not k.startswith("_")}, fh)
+    os.replace(tmp, job["_path"])
+
+
+def _load_job(job_id: str):
+    try:
+        with open(_job_path(job_id), encoding="utf-8") as fh:
+            job = json.load(fh)
+        job["_path"] = _job_path(job_id)
+        return job
+    except (OSError, ValueError):
+        return None
 
 
 def _purge_jobs() -> None:
-    """Drop expired jobs (called with _jobs_lock held)."""
+    """Unlink expired job files (opportunistic; atomic writes make this safe
+    across the two workers)."""
     now = time.time()
-    for jid in [j for j, job in _jobs.items() if now - job["created_ts"] > JOB_TTL_S]:
-        _jobs.pop(jid, None)
+    try:
+        for name in os.listdir(JOBS_DIR):
+            if not name.endswith(".json"):
+                continue
+            p = os.path.join(JOBS_DIR, name)
+            try:
+                if now - os.path.getmtime(p) > JOB_TTL_S:
+                    os.unlink(p)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _count_jobs() -> int:
+    try:
+        return len([n for n in os.listdir(JOBS_DIR) if n.endswith(".json")])
+    except OSError:
+        return 0
 
 
 def _throway_upload(markdown: str, name: str) -> str:
@@ -80,17 +127,19 @@ def _throway_upload(markdown: str, name: str) -> str:
 def _run_llama_job(job_id: str, data: bytes, filename: str, tier: str,
                    language: str, transfer: str) -> None:
     """Background worker: poll llamaparse (I/O only), then optionally hand the
-    result to throway. Markdown is dropped from memory after a successful
-    transfer - the box is small."""
-    job = _jobs[job_id]
+    result to throway. The markdown never lingers in memory - it goes straight
+    to the job file / throway."""
+    job = _load_job(job_id)
     with _llama_slots:
         job["status"] = "running"
+        _save_job(job)
         try:
             markdown = _llamaparse_to_markdown(
                 data, filename, tier, language)
         except Exception as e:
             job["status"] = "failed"
             job["error"] = f"{type(e).__name__}: {e}"
+            _save_job(job)
             return
         del data
         job["chars"] = len(markdown)
@@ -104,6 +153,7 @@ def _run_llama_job(job_id: str, data: bytes, filename: str, tier: str,
                 job["transfer_error"] = f"{type(e).__name__}: {e}"
         job["markdown"] = markdown
         job["status"] = "done"
+        _save_job(job)
 
 
 def _convert_local(data: bytes, method: str, out_q) -> None:
@@ -364,19 +414,20 @@ def pdf_to_md(
         # Long documents must run as a background job: the sync request would
         # die at gunicorn's 120s timeout (~2s/page measured).
         if page_count > PDF_ASYNC_PAGES or not wait:
-            with _jobs_lock:
-                _purge_jobs()
-                if len(_jobs) >= MAX_JOBS:
-                    raise HTTPException(
-                        status_code=429, headers={"Retry-After": "60"},
-                        detail="Too many jobs queued; retry later.")
-                job_id = secrets.token_urlsafe(12)
-                _jobs[job_id] = {
-                    "job_id": job_id, "status": "queued",
-                    "created_ts": time.time(),
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "pages": page_count, "method": "llamaparse", "tier": tier,
-                }
+            _purge_jobs()
+            if _count_jobs() >= MAX_JOBS:
+                raise HTTPException(
+                    status_code=429, headers={"Retry-After": "60"},
+                    detail="Too many jobs queued; retry later.")
+            job_id = secrets.token_urlsafe(12)
+            job = {
+                "job_id": job_id, "status": "queued",
+                "created_ts": time.time(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "pages": page_count, "method": "llamaparse", "tier": tier,
+                "_path": _job_path(job_id),
+            }
+            _save_job(job)
             threading.Thread(
                 target=_run_llama_job,
                 args=(job_id, data, filename, tier, language, transfer),
@@ -416,9 +467,8 @@ def pdf_to_md(
 @router.get("/jobs/{job_id}", tags=["PDF"],
             summary="Status/result of an async pdf conversion job")
 def pdf_job_status(job_id: str, token: str = Depends(verify_token)):
-    with _jobs_lock:
-        _purge_jobs()
-        job = _jobs.get(job_id)
+    _purge_jobs()
+    job = _load_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Unknown or expired job")
     out = {k: job.get(k) for k in

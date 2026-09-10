@@ -1,4 +1,5 @@
 """Tests for async llamaparse jobs (wait=false, /pdf/jobs/{id}, throway)."""
+import os
 import time
 
 import fitz
@@ -26,8 +27,8 @@ def _fast(monkeypatch):
     monkeypatch.setattr(pdf_router, "_llama_api_key", lambda: "llx-test")
     monkeypatch.setattr(pdf_router, "_llamaparse_to_markdown",
                         lambda data, fn, tier, lang: "# converted")
-    with pdf_router._jobs_lock:
-        pdf_router._jobs.clear()
+    for name in os.listdir(pdf_router.JOBS_DIR):
+        os.unlink(os.path.join(pdf_router.JOBS_DIR, name))
 
 
 def _wait_done(job_id: str, tries: int = 100):
