@@ -1,9 +1,6 @@
 import subprocess
-import os
 import platform
 
-# Path to the custom lynx config file
-lynx_config_path = os.path.join(os.path.dirname(__file__), 'lynx.cfg')
 if platform.system() == 'Linux':
     lynx_path = '/usr/bin/lynx'
 else:
@@ -11,14 +8,16 @@ else:
 
 
 def lynx_url(url: str) -> str:
-    """Fetch a webpage using Lynx with a custom config and return the text output."""
+    """Fetch a webpage using Lynx and return the text output.
+
+    Uses the system lynx config: passing -cfg would replace it wholesale
+    (which breaks HTTPS resolution on this box). Cookie handling is covered
+    by the -accept_all_cookies flag and lynx's defaults instead.
+    """
     try:
-        # Run the Lynx command with the custom config file and a 15-second timeout
         result = subprocess.run(
-            # '-cfg=PATH' must be a single argv token; split tokens would be
-            # treated as extra startfiles and the config would be ignored.
-            [lynx_path, '-dump', f'-cfg={lynx_config_path}',
-             '-display_charset=utf-8', '-accept_all_cookies', url],
+            [lynx_path, '-dump', '-display_charset=utf-8',
+             '-accept_all_cookies', url],
             capture_output=True,
             text=True,
             check=True,
