@@ -163,7 +163,11 @@ async def log_requests(request: Request, call_next):
 def help_(request: Request):
     """Agent-friendly discovery endpoint: how to authenticate, where the
     machine-readable spec lives, what the endpoint groups are."""
-    base = str(request.base_url).rstrip("/")
+    # Behind nginx the worker doesn't honor proxy headers for base_url, so
+    # reconstruct it explicitly (public scheme + host + root_path prefix).
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or request.url.netloc
+    base = f"{proto}://{host}{request.scope.get('root_path', '')}"
     return {
         "service": "Web APIs",
         "version": app.version,
