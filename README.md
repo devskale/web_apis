@@ -767,7 +767,7 @@ Fetch URL content using the lynx browser. Same `http(s)`-only rule as `/fetch_ur
 
 ### POST /pdf/to_md
 
-Convert a PDF (≤10MB **and** ≤500 pages, `413` above either) to Markdown-like text. Anything that isn't a valid PDF returns `400`; scanned PDFs without OCR return `422` (no text extracted) with the local converters.
+Convert a PDF (≤10MB **and** ≤500 pages, `413` above either) to Markdown-like text. Anything that isn't a valid PDF returns `400`; scanned PDFs without OCR return `422` (no text extracted) with the local converters. Local conversion runs in a killable child process — a pathological PDF (e.g. decompression bomb) returns `504` after ~60s instead of hanging the worker.
 
 **Converters (`method`):**
 | `method` | Where | Notes |
