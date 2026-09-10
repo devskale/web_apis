@@ -785,6 +785,8 @@ With `method=llamaparse` these optional params apply: `tier` selects the LlamaPa
 
 **No job zombies:** every job carries a hard deadline — default **20 minutes** (`PDF_JOB_DEADLINE_MIN` env). It's enforced at three points: the worker won't wait for the conversion slot past it, it aborts before writing results past it, and any status read flips an overdue queued/running job to `failed` (`"error": "auto-killed: …"`). Job files are evicted after 2h; results shared via throway expire independently after 4h.
 
+**RAM discipline** (the box has ~1GB): queued async jobs spill their upload payload to disk (zero heap while waiting), the worker reads bytes only while holding the single conversion slot, explicit `gc.collect()` returns big buffers immediately, and throway-transferred results are dropped from memory. Local (pdfplumber) conversion runs in a child process capped at 1GB address space; the systemd unit caps the whole service at `MemoryMax=400M`.
+
 **`transfer=throway`:** the markdown is uploaded to [skale.dev/throway](https://skale.dev/throway) (4h TTL, 5MB cap) and the response contains only `markdown_url` + `expires_in` instead of the full text — recommended for large documents. Auth for LlamaParse comes from `LLAMA_CLOUD_API_KEY` (env/.env) with a credgoo `llamacloud` fallback. Error mapping: key missing → `503`, quota/rate limit → `429`, LlamaParse failure → `502`, job timeout → `504`.
 
 Multipart upload:

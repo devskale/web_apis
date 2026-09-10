@@ -146,3 +146,14 @@ def test_worker_autokills_when_queued_too_long(monkeypatch):
     done = _wait_done(r.json()["job_id"])
     assert done["status"] == "failed"
     assert "auto-killed" in done["error"]
+
+
+def test_no_payload_files_left_after_done():
+    """RAM/disk hygiene: the spilled upload .pdf must be gone once the job
+    reached a terminal state."""
+    r = client.post("/pdf/to_md?method=llamaparse&wait=false", headers=TOKEN,
+                    files={"file": ("a.pdf", _pdf(2), "application/pdf")})
+    done = _wait_done(r.json()["job_id"])
+    assert done["status"] == "done"
+    leftovers = [n for n in os.listdir(pdf_router.JOBS_DIR) if n.endswith(".pdf")]
+    assert leftovers == []

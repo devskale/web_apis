@@ -1,3 +1,4 @@
+import gc
 import io
 import json
 import logging
@@ -151,25 +152,39 @@ def _throway_upload(markdown: str, name: str) -> str:
     return resp.json()["url"]
 
 
-def _run_llama_job(job_id: str, data: bytes, filename: str, tier: str,
+def _cleanup_pdf(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _run_llama_job(job_id: str, pdf_path: str, filename: str, tier: str,
                    language: str, transfer: str) -> None:
     """Background worker: poll llamaparse (I/O only), then optionally hand the
-    result to throway. The markdown never lingers in memory - it goes straight
-    to the job file / throway. Every stage checks the hard job deadline so no
-    zombie job or thread survives it."""
+    result to throway.
+
+    RAM discipline (amd has ~1GB): the upload payload lives on DISK while the
+    job is queued - bytes are read only after the conversion slot is acquired
+    and released right after the conversion. gc.collect() returns big buffers
+    to the OS immediately instead of at some later allocation. Every stage
+    checks the hard job deadline so no zombie survives it."""
     job = _load_job(job_id)
 
-    # 1. never wait for the conversion slot past the deadline
+    # 1. never wait for the conversion slot past the deadline (zero heap while
+    #    queued - the payload is on disk)
     acquired = False
     while not _deadline_hit(job):
         if _llama_slots.acquire(timeout=5):
             acquired = True
             break
     if not acquired:
+        _cleanup_pdf(pdf_path)
         job["status"] = "failed"
         job["error"] = "auto-killed: queued too long (deadline exceeded)"
         _save_job(job)
         return
+    data = None
     try:
         # 2. the conversion itself is bounded (LLAMA_POLL_TIMEOUT_S); abort
         #    before writing results past the deadline
@@ -181,6 +196,14 @@ def _run_llama_job(job_id: str, data: bytes, filename: str, tier: str,
         job["status"] = "running"
         _save_job(job)
         try:
+            with open(pdf_path, "rb") as fh:
+                data = fh.read()
+        except OSError as e:
+            job["status"] = "failed"
+            job["error"] = f"OSError: {e}"
+            _save_job(job)
+            return
+        try:
             markdown = _llamaparse_to_markdown(
                 data, filename, tier, language)
         except Exception as e:
@@ -189,6 +212,7 @@ def _run_llama_job(job_id: str, data: bytes, filename: str, tier: str,
             _save_job(job)
             return
         del data
+        gc.collect()
         if _deadline_hit(job):
             job["status"] = "failed"
             job["error"] = "auto-killed: deadline exceeded after conversion"
@@ -206,8 +230,12 @@ def _run_llama_job(job_id: str, data: bytes, filename: str, tier: str,
         job["markdown"] = markdown
         job["status"] = "done"
         _save_job(job)
+        del markdown
     finally:
         _llama_slots.release()
+        _cleanup_pdf(pdf_path)
+        del data
+        gc.collect()
 
 
 def _convert_local(data: bytes, method: str, out_q) -> None:
@@ -461,6 +489,8 @@ def pdf_to_md(
             logging.error("pdf/to_md: %s child exited without result", method)
             raise HTTPException(
                 status_code=500, detail="PDF processing failed.")
+        # The child just released its buffers; reclaim promptly (small box).
+        gc.collect()
         if status == "error":
             logging.error("pdf/to_md failed (%s): %s", method, payload)
             raise HTTPException(
@@ -487,9 +517,16 @@ def pdf_to_md(
                 "_path": _job_path(job_id),
             }
             _save_job(job)
+            # RAM: spill the upload payload to disk - queued jobs cost zero
+            # heap; the worker reads it only while holding the slot.
+            pdf_path = job["_path"][:-5] + ".pdf"
+            with open(pdf_path, "wb") as fh:
+                fh.write(data)
+            del data
+            gc.collect()
             threading.Thread(
                 target=_run_llama_job,
-                args=(job_id, data, filename, tier, language, transfer),
+                args=(job_id, pdf_path, filename, tier, language, transfer),
                 daemon=True).start()
             return JSONResponse(status_code=202, content={
                 "job_id": job_id, "status": "queued", "pages": page_count,
