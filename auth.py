@@ -29,7 +29,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
     if not credentials:
         raise HTTPException(
             status_code=401,
-            detail="Missing authentication credentials",
+            detail="Missing authentication credentials (GET /help for usage)",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -39,7 +39,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
     if not any(secrets.compare_digest(token, valid) for valid in valid_tokens):
         raise HTTPException(
             status_code=401,
-            detail="Invalid token",
+            detail="Invalid token (GET /help for usage)",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return token

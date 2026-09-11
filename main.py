@@ -181,10 +181,32 @@ def help_(request: Request):
         "how_to_use": {
             "auth": "Send 'Authorization: Bearer <token>' on every endpoint. "
                     "401 without/invalid token; tokens are configured server-side (TOKENS).",
+            "get_a_token": "In the skale environment: `credgoo FETCH_URL_BEARER` "
+                           "returns a valid token (or ask the operator for a TOKENS entry).",
             "base_url": base,
             "machine_readable_spec": base + "/openapi.json",
             "human_docs": base + "/docs",
             "example": f"curl -H 'Authorization: Bearer <token>' '{base}/echo?text=ping'",
+        },
+        "async_jobs": {
+            "pattern": "POST /pdf/to_md?method=llamaparse&wait=false returns 202 with "
+                       "{job_id, poll}. Poll GET <poll> (same Bearer auth) until "
+                       "status is done|failed. Hard deadline 20 min per job.",
+            "when": "llamaparse docs beyond ~40 pages are forced async automatically "
+                    "(the 202 body says auto_async: true).",
+            "share": "transfer=throway uploads the result to skale.dev/throway "
+                     "(4h TTL) and returns markdown_url instead of the full text.",
+        },
+        "rate_limits": {
+            "/firmenbuch/*": "30 requests/minute per token, then 429 + Retry-After",
+            "pdf_jobs": "1 concurrent llamaparse conversion, max 10 jobs",
+        },
+        "errors": {
+            "401": "missing/invalid Bearer token — see how_to_use.get_a_token",
+            "422": "input parsed but yielded nothing (e.g. scan without OCR — "
+                   "use method=llamaparse)",
+            "429": "rate limit or quota — honor Retry-After",
+            "502/504": "upstream conversion failed/timed out — retry or use wait=false",
         },
         "endpoint_groups": {
             "/echo": "health check, echoes sanitized input",
