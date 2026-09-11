@@ -399,8 +399,27 @@ def _llamaparse_to_markdown(
         "local) or llamaparse (LlamaParse cloud service - "
         "handles OCR and complex layouts; the document is uploaded to LlamaCloud). "
         "Limits: 10MB and 500 pages. Scanned PDFs without OCR will not yield text "
-        "with the local converter. Returns markdown content and statistics."),
-)
+        "with the local converter. Returns markdown content and statistics. "
+        " llamaparse documents beyond ~40 pages are converted as async jobs "
+        " automatically: the response is then 202 with a job_id - poll "
+        " GET /pdf/jobs/{job_id} until done/failed."),
+    responses={
+        202: {
+            "description": "Async job accepted (wait=false or llamaparse document "
+                           "beyond ~40 pages). Poll GET /pdf/jobs/{job_id}.",
+            "content": {"application/json": {"example": {
+                "job_id": "M4w_SOjN5-JmmlXz", "status": "queued", "pages": 23,
+                "poll": "https://amd.skale.dev/api/pdf/jobs/M4w_SOjN5-JmmlXz",
+                "auto_async": False}}},
+        },
+        400: {"description": "Not a valid PDF (magic bytes / parse check)"},
+        413: {"description": "PDF too large (max 10MB / 500 pages)"},
+        422: {"description": "No text extracted (e.g. scan without OCR)"},
+        429: {"description": "Rate limit, llamaparse quota, or job queue full"},
+        502: {"description": "LlamaParse failure or throway transfer failed"},
+        503: {"description": "LlamaParse key missing, or throway transfer disabled"},
+        504: {"description": "Job deadline exceeded (default 20 min)"},
+    })
 # Deliberately a sync endpoint: the conversion is CPU-bound, and FastAPI runs
 # sync endpoints in the threadpool - an async def here would block the worker's
 # event loop (and with it all other requests) for the whole conversion.
@@ -561,7 +580,13 @@ def pdf_to_md(
 
 
 @router.get("/jobs/{job_id}", tags=["PDF"],
-            summary="Status/result of an async pdf conversion job")
+            summary="Status/result of an async pdf conversion job",
+            responses={
+                200: {"description": "Current job status; on done includes markdown "
+                                     "or markdown_url (transfer=throway)"},
+                404: {"description": "Unknown or expired job (jobs live ~2h)"},
+                429: {"description": "Rate limit"},
+            })
 def pdf_job_status(job_id: str, token: str = Depends(verify_token)):
     _purge_jobs()
     job = _load_job(job_id)

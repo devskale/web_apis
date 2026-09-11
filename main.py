@@ -114,7 +114,7 @@ app = FastAPI(
     root_path="/api",
     title="Web APIs",
     description="Endpoints for DuckDuckGo search, web tools, PDF/image conversion, and Austrian company data.",
-    version="1.2.0",
+    version="1.3.0",
 )
 
 app.include_router(pdf_router, prefix="/pdf", tags=["PDF"])
