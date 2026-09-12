@@ -125,6 +125,8 @@ def _searxng_search(query: str, max_results: int):
                 auth=creds["auth"],
                 timeout=15,
             )
+            logging.warning("searxng attempt %d: HTTP %s", attempt + 1,
+                            resp.status_code)
             if resp.status_code != 200:
                 last_err = f"HTTP {resp.status_code}"
             else:
