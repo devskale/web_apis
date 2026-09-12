@@ -38,10 +38,10 @@ def test_timelimited_queries_expire_faster():
 
     cache.cache_put("q", "d", [{"href": "x"}])
     path = os.path.join(cache._CACHE_DIR, next(iter(os.listdir(cache._CACHE_DIR))))
-    # 10 min old: still fresh under the 12h default TTL, expired for a
+    # 20 min old: still fresh under the 12h default TTL, expired for a
     # timelimited query (15 min TTL). Note: a cache hit refreshes mtime
     # (LRU), so only ONE lookup may run against the aged file.
-    old = time.time() - 600
+    old = time.time() - 1200
     os.utime(path, (old, old))
     assert cache.cache_get("q", "d") is None
 
