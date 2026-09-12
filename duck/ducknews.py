@@ -1,6 +1,7 @@
 from ddgs import DDGS
 from datetime import datetime, timezone
 import logging
+import os
 import time
 
 from duck.throttle import DdgThrottleTimeout, ddg_slot
@@ -10,6 +11,19 @@ logging.basicConfig(level=logging.INFO)
 # ddgs is flaky in bursts (DNS hiccups, soft blocks): retry before giving up.
 # None signals a backend error; [] means the search genuinely returned nothing.
 _DDGS_ATTEMPTS = 3
+
+# Default engines. ddgs "auto" wastes ~8s per attempt on engines that
+# hard-fail from the amd datacenter IP (duckduckgo soft-blocked, brave/
+# mojeek/yahoo blocked, google/grokipedia IPv6-unreachable, wikipedia
+# DNS-broken for wt-wt) — and one failing engine can raise for the whole
+# call. bing+yandex are proven to work; the LIST form merges both (the
+# comma string silently falls back to auto). Env: DDG_BACKENDS="bing,yandex"
+# or "auto"/"all".
+_raw_backends = os.environ.get("DDG_BACKENDS", "bing,yandex").strip()
+DEFAULT_BACKEND = (
+    _raw_backends if _raw_backends in {"auto", "all"}
+    else [b.strip() for b in _raw_backends.split(",") if b.strip()]
+)
 
 
 def _ddgs_call(fn, **kwargs):
@@ -40,8 +54,7 @@ def search_news(topic, region="wt-wt", safesearch="off", timelimit="m", max_resu
     }
     if page is not None:
         kwargs["page"] = page
-    if backend is not None:
-        kwargs["backend"] = backend
+    kwargs["backend"] = backend if backend is not None else DEFAULT_BACKEND
     if proxy is not None:
         kwargs["proxy"] = proxy
     if verify is not None:
@@ -88,8 +101,7 @@ def search_web(
         "timelimit": timelimit,
         "max_results": max_results,
     }
-    if backend is not None:
-        kwargs["backend"] = backend
+    kwargs["backend"] = backend if backend is not None else DEFAULT_BACKEND
     if page is not None:
         kwargs["page"] = page
     if proxy is not None:
