@@ -213,8 +213,8 @@ def help_(request: Request):
             "/fetch_url": "fetch a URL as text via w3m or lynx (http(s) only)",
             "/lynx": "fetch a URL via lynx",
             "/w3m_google": "web search (DuckDuckGo-backed, region by domain)",
-            "/duck/news": "news search with region/timelimit filters",
-            "/duck/search": "web search with site:/filetype:/inurl: operators",
+            "/duck/news": "news search (ddgs/yahoo) with region/timelimit filters",
+            "/duck/search": "web search: cache → ddgs/yahoo → SearXNG fallback; site:/filetype:/inurl: operators",
             "/duck/translate": "translation-link search",
             "/pdf/to_md": "POST PDF -> Markdown (pdfplumber local default; "
                           "method=llamaparse for scans/OCR, tier + language params)",
@@ -290,10 +290,12 @@ def w3m_fetch(query: str, num_results: int = 10, domain: str = "at", token: str 
 @app.get(
     "/duck/news",
     tags=["Duck"],
-    summary="DuckDuckGo news search",
+    summary="News search (ddgs, yahoo engine)",
     description=(
         "Search for news articles with localization and filtering parameters. "
-        "Supports region, safesearch, timelimit, pagination, backend selection, proxy, and SSL verification."),
+        "Runs on ddgs with the yahoo engine pinned by default (the only engine "
+        "reliably answering from this datacenter IP); bursts are serialized "
+        "box-wide. 404 = no news found, 502 = backend failed after retries."),
 )
 def get_news(
     topic: str = Query(..., description="News search topic."),
@@ -306,7 +308,8 @@ def get_news(
     max_results: int = Query(8, description="Maximum number of news results."),
     page: Optional[int] = Query(None, description="Results page number."),
     backend: Optional[str] = Query(
-        None, description="Backend: auto, all, bing, duckduckgo, yahoo."),
+        None, description="ddgs engine override: comma list like 'yahoo,brave' "
+        "or 'auto'. Default: server-pinned 'yahoo'."),
     proxy: Optional[str] = Query(
         None, description="Proxy URL, e.g. socks5h://127.0.0.1:9150."),
     verify: Optional[bool] = Query(
@@ -335,12 +338,17 @@ def get_news(
 @app.get(
     "/duck/search",
     tags=["Duck"],
-    summary="DuckDuckGo text search with advanced filters",
+    summary="Web text search — ddgs→SearXNG chain, cached",
     description=(
-        "Perform a DuckDuckGo text search with rich filters. Supports operators such as "
-        "`site:<domain>`, `filetype:<ext>`, `inurl:<fragment>`, and exclusion via `exclude` list. "
-        "Set `exact=true` to quote the query for exact phrase matching. You can also tune `region`, "
-        "`safesearch`, `timelimit`, choose a search `backend`, paginate via `page`, and route through a `proxy`."
+        "Resilient web search with rich filters. Chain: query cache (12h TTL, "
+        "15min when `timelimit` is set) → **ddgs on this box** (yahoo engine, "
+        "~1s) → **private SearXNG** (google/brave/startpage via home IP) as "
+        "fallback, circuit-breaker protected; empty primary results are "
+        "re-checked on the aggregated fallback. Operators: `site:<domain>`, "
+        "`filetype:<ext>`, `inurl:<fragment>`, `-exclude` terms, quoted exact "
+        "(`exact=true`). Identical queries within the TTL return identical "
+        "cached results. Errors: 404 = no results, 502 = all backends failed "
+        "(or queue saturated)."
     ),
 )
 def get_duck_search(
@@ -357,7 +365,9 @@ def get_duck_search(
     backend: Optional[str] = Query(
         None,
         description=(
-            "Search backend: auto, all, bing, brave, duckduckgo, google, mojeek, yandex, yahoo, wikipedia."),
+            "ddgs engine override: comma list like 'yahoo,brave' or 'auto'. "
+            "Default: server-pinned 'yahoo' (sole engine reliably answering "
+            "from this datacenter IP; duckduckgo/brave/google/mojeek block it)."),
     ),
     site: Optional[str] = Query(
         None, description="Restrict results to a specific domain (site:<domain>)."),

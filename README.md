@@ -673,7 +673,11 @@ Get the latest available day-ahead spot-price chart.
 
 ---
 
-## DuckDuckGo Search
+## Web Search (`/duck/*`)
+
+Resiliente Such-Kette (2026-09): **Query-Cache → ddgs/yahoo (amd-Datacenter-IP) →
+private SearXNG (google/brave/startpage über lubu-Heim-IP)**. Bursts werden box-weit
+serialisiert — Details unten bei `/duck/search`.
 
 ### GET /duck/news
 
@@ -688,7 +692,7 @@ Search for news articles with localization and filtering.
 | `timelimit` | string | No | `d`, `w`, `m` (default), `y` |
 | `max_results` | int | No | Default: 8 |
 | `page` | int | No | Results page number |
-| `backend` | string | No | `auto`, `bing`, `duckduckgo`, `yahoo`, ... |
+| `backend` | string | No | ddgs engine override: comma list (`yahoo,brave`) oder `auto`. Default: serverseitig gepinnt `yahoo` |
 | `proxy` | string | No | Proxy URL passed to the search backend, e.g. `socks5h://127.0.0.1:9150` |
 | `verify` | bool | No | Verify SSL for backend requests (default `true`) |
 
@@ -716,7 +720,7 @@ Text search with advanced filters. Supports operators: `site:`, `filetype:`, `in
 | `page` | int | No | Results page number |
 | `filetype` | string | No | Filter by extension |
 | `inurl` | string | No | Filter by URL fragment |
-| `backend` | string | No | Search backend selection |
+| `backend` | string | No | ddgs engine override: comma list (`yahoo,brave`) oder `auto`. Default: serverseitig gepinnt `yahoo` |
 | `proxy` | string | No | Proxy URL passed to the search backend |
 | `verify` | bool | No | Verify SSL for backend requests (default `true`) |
 
@@ -726,17 +730,26 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
   "https://your-server/api/duck/search?query=fastapi+site:github.com&max_results=10"
 ```
 
-**Throttling & Backend-Kette:** DDG soft-blockt die Datacenter-IP bei
-Bursts — ddgs-Calls werden daher **box-weit** serialisiert (flock, Mindest-
-abstand; übersättigte Queues failen schnell mit 502 statt sich zu stauen).
-Backend-Kette für `/duck/search`: **Primary ddgs/yahoo auf amd**
-(`DUCK_PRIMARY=ddgs|searxng`), **Fallback private SearXNG (lubu)** mit Circuit
-Breaker (öffnet nach 2 Fehlern, Half-Open nach 5 Min). Leere Ergebnisse des
-Primaries werden am aggregierten Fallback gegengeprüft. Query-Cache: 12h TTL
-(15 Min bei `timelimit`), 1000 Einträge LRU. Tunables: `DDG_MIN_INTERVAL`,
-`DDG_MAX_WAIT`, `DDG_BACKENDS`, `DUCK_CACHE_*`.
+**Backend-Kette & Verteilung:**
+
+| Stufe | Was | Env-Tunables |
+|---|---|---|
+| ① Cache | Identische Queries werden aus dem Disk-Cache beantwortet — 12h TTL, 15 Min bei gesetztem `timelimit`, 1000 Einträge LRU | `DUCK_CACHE_TTL_H`, `DUCK_CACHE_TTL_FRESH_S`, `DUCK_CACHE_MAX` |
+| ② Primary | **ddgs auf amd** — yahoo-Engine (einzige, die von der Datacenter-IP verlässlich antwortet) | `DDG_BACKENDS` (Default `yahoo`), `DUCK_PRIMARY=ddgs\|searxng` |
+| ③ Empty-Recheck | Liefert der Primary `[]`, wird am aggregierten Fallback gegengeprüft (Single-Engine-Verdikt ≠ final) | — |
+| ④ Fallback | **Private SearXNG (lubu)**: google/brave/startpage über die Heim-IP; Circuit Breaker schützt vor dunkler lubu-Box (2 Fehler → offen, Half-Open-Probe nach 5 Min) | `SEARXNG_BREAKER_THRESHOLD`, `SEARXNG_BREAKER_COOLDOWN` |
+| ⑤ Burst-Schutz | ddgs-Calls box-weit serialisiert (flock, Mindestabstand); übersättigte Queues failen schnell mit 502 statt sich zu stauen | `DDG_MIN_INTERVAL` (1.2s), `DDG_MAX_WAIT` (45s) |
+
+**Fehlercodes:** `404` = keine Treffer (Clients sollen das als leeres Ergebnis behandeln),
+`502` = alle Backends fehlgeschlagen oder Queue gesättigt.
+
+**Ops-Reserven:** Priorität umdrehen via `DUCK_PRIMARY=searxng`; amd2 als drittes
+Kettenglied (brave antwortet dort mit 200); Engine-Rotation auf lubu per-Request
+(`engines=`-Sets) bei steigendem Volumen.
 
 ### GET /duck/translate
+
+Übersetzungs-Link-Suche; läuft durch dieselbe Kette (Cache → ddgs → SearXNG) wie `/duck/search`.
 
 **Parameters:** `text` (required), `to_language` (required, e.g. `de`, `fr`, `es`)
 
