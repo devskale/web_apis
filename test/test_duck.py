@@ -60,21 +60,32 @@ def test_search_translate_restricts_site():
     assert query.endswith("site:translate.google.com")
 
 
-def test_search_falls_back_to_searxng_when_ddgs_down():
+def test_searxng_primary_and_ddg_fallback():
     from duck import search as duck_search_mod
 
-    def always_down(query, **kw):
+    # searxng serves -> ddgs never called
+    with mock.patch("duck.search.DDGS") as ddgs, \
+            mock.patch("duck.search.time.sleep"), \
+            mock.patch.object(duck_search_mod, "_searxng_creds",
+                              lambda: {"url": "https://sx.test", "auth": ("u", "p")}), \
+            mock.patch.object(duck_search_mod.requests, "get") as get:
+        get.return_value.status_code = 200
+        get.return_value.json.return_value = {
+            "results": [{"title": "t", "url": "https://x", "content": "c"}]}
+        results = duck_search_mod.search("anything", 5, "at")
+    assert results == [{"url": "https://x", "description": "c"}]
+    ddgs.return_value.text.assert_not_called()
+
+    # searxng down -> ddgs fallback serves
+    def searx_down(query, max_results):
         return None
 
     with mock.patch("duck.search.DDGS") as ddgs, \
             mock.patch("duck.search.time.sleep"), \
             mock.patch.object(duck_search_mod, "_searxng_creds",
                               lambda: {"url": "https://sx.test", "auth": ("u", "p")}), \
-            mock.patch.object(duck_search_mod.requests, "get") as get:
-        ddgs.return_value.text.side_effect = RuntimeError("down")
-        get.return_value.status_code = 200
-        get.return_value.json.return_value = {
-            "results": [{"title": "t", "url": "https://x", "content": "c"}]}
+            mock.patch.object(duck_search_mod, "_searxng_search", searx_down):
+        ddgs.return_value.text.return_value = [
+            {"href": "https://ddg", "body": "b"}]
         results = duck_search_mod.search("anything", 5, "at")
-
-    assert results == [{"url": "https://x", "description": "c"}]
+    assert results == [{"url": "https://ddg", "description": "b"}]

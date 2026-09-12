@@ -13,7 +13,8 @@ def test_get_numof_qresults_ignores_non_numeric_brackets():
     assert get_numof_qresults("[x] y\n[3] z") == 3
 
 
-def test_duck_search_maps_domain_to_region():
+def test_duck_search_maps_domain_to_region(monkeypatch):
+    monkeypatch.setattr("duck.search._searxng_search", lambda q, n: None)
     with mock.patch("duck.search.DDGS") as ddgs:
         ddgs.return_value.text.return_value = iter(
             [{"href": "https://orf.at", "body": "news"}])

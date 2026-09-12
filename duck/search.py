@@ -103,15 +103,15 @@ def search(query: str, num_results: int = 10, domain: str = 'at') -> list | None
     elif domain == "com":
         region = "us-en"
 
+    # SearXNG first: it aggregates from the lubu box (not bot-blocked like the
+    # amd datacenter IP — google/brave/mojeek answer 429/403/CAPTCHA here).
+    # DDG remains the fallback for the rare case SearXNG fails.
+    results = _searxng_search(query, num_results)
+    if results is not None:
+        return results
+
     rows = _ddgs_text(query, region=region, max_results=num_results)
     if rows is not None:
         return [{"url": r.get("href", ""),
                  "description": r.get("body", "")} for r in rows]
-
-    # ddgs exhausted -> private SearXNG fallback (already returns rows in the
-    # final url/description shape)
-    fallback = _searxng_search(query, num_results)
-    if fallback is not None:
-        logging.info("search: served by searxng fallback")
-        return fallback
     return None
