@@ -174,7 +174,12 @@ def search(query: str, num_results: int = 10, domain: str = 'at') -> list | None
     # amd datacenter IP — google/brave/mojeek answer 429/403/CAPTCHA here).
     # DDG remains the fallback for the rare case SearXNG fails.
     results = _searxng_search(query, num_results)
-    logging.warning("search: searxng -> %s", len(results) if results is not None else "None")
+    try:
+        with open("/home/ubuntu/code/web_apis/logs/search_debug.log", "a") as _dbg:
+            _dbg.write(f"{time.strftime('%H:%M:%S')} searxng -> "
+                       f"{len(results) if results is not None else 'None'}\n")
+    except Exception:
+        pass
     if results is not None:
         return results
 
