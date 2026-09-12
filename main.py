@@ -227,18 +227,6 @@ def help_(request: Request):
     }
 
 
-@app.get("/debug_duck2", include_in_schema=False)
-def debug_duck2():
-    import duck.search as m, inspect
-    return {
-        "file": m.__file__,
-        "mtime": __import__("os").path.getmtime(m.__file__),
-        "has_entry_warning": "searxng search called" in inspect.getsource(m._searxng_search),
-        "search_is_primary_searxng": "results = _searxng_search" in inspect.getsource(m.search),
-    "live_searxng": (lambda r: len(r) if r is not None else "None")(m._searxng_search("probe", 3)),
-    }
-
-
 @app.get("/echo")
 def echo(text: str = Query(default="Hello, World!", min_length=1), token: str = Depends(verify_token)):
     cleaned_text = echoing(text)
@@ -408,8 +396,7 @@ def get_duck_search(
     )
     if results is None:
         raise HTTPException(
-            status_code=502,
-            detail="search backend temporarily unavailable (trace=b1)")
+            status_code=502, detail="search backend temporarily unavailable")
     if not results:
         raise HTTPException(status_code=404, detail="No results found.")
     return {"results": results}
