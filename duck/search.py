@@ -1,3 +1,4 @@
+import json
 import os
 import time
 
@@ -12,39 +13,101 @@ logging.basicConfig(level=logging.INFO)
 _DDGS_ATTEMPTS = 3
 
 # Fallback when ddgs fails entirely: the private SearXNG instance.
-# Resolved via credgoo service 'searx' (format URL@USER@PASS); the resolved
-# credential is kept for SEARXNG_CREDS_REFRESH_DAYS, then re-pulled fresh.
-# SEARXNG_URL env overrides credgoo entirely if set.
-SEARXNG_CRED = os.environ.get("SEARXNG_URL", "")
+# Credentials are resolved via credgoo service 'searx' (format URL@USER@PASS),
+# persisted to data/searxng_creds.json AND mirrored into the .env
+# (SEARXNG_URL=...). Re-pulled fresh when older than SEARXNG_CREDS_REFRESH_DAYS.
 SEARXNG_CREDS_REFRESH_DAYS = int(os.environ.get("SEARXNG_CREDS_REFRESH_DAYS", "7"))
 
-_sx_cred_cache: dict = {"creds": None, "ts": 0.0}
+_sx_state_path = os.path.join(os.path.dirname(__file__), "data", "searxng_creds.json")
+_sx_mem: dict = {"creds": None, "ts": 0.0}
+
+
+def _parse_cred(cred: str):
+    parts = (cred or "").split("@")
+    if len(parts) < 3 or not parts[0]:
+        return None
+    return {"url": parts[0].rstrip("/"), "auth": (parts[1], parts[2])}
+
+
+def _load_searxng_state():
+    try:
+        with open(_sx_state_path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _persist_searxng_state(cred: str, ts: float) -> None:
+    os.makedirs(os.path.dirname(_sx_state_path), exist_ok=True)
+    tmp = _sx_state_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"cred": cred, "ts": ts}, fh)
+    os.replace(tmp, _sx_state_path)
+
+
+def _update_env_line(cred: str) -> None:
+    """Mirror SEARXNG_URL into .env so the credential survives and is visible."""
+    try:
+        env_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", ".env"))
+        lines = []
+        found = False
+        if os.path.exists(env_path):
+            lines = open(env_path, encoding="utf-8").read().splitlines()
+        for i, line in enumerate(lines):
+            if line.startswith("SEARXNG_URL="):
+                lines[i] = f"SEARXNG_URL={cred}"
+                found = True
+                break
+        if not found:
+            lines.append(f"SEARXNG_URL={cred}")
+        tmp = env_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        os.replace(tmp, env_path)
+    except OSError as e:
+        logging.error("searxng: .env update failed: %s", e)
 
 
 def _searxng_creds():
-    """Resolve SearXNG credentials via credgoo, re-pulled every N days.
-    Stale-tolerant: if a re-pull fails, the last known creds keep serving."""
+    """Resolve SearXNG credentials. Order: 1h in-process cache → persisted
+    state (fresh within SEARXNG_CREDS_REFRESH_DAYS) → credgoo re-pull (which
+    is persisted and mirrored to .env). Stale-tolerant: if the re-pull fails,
+    the last known credential keeps serving."""
     now = time.time()
-    cached = _sx_cred_cache["creds"]
-    if cached and now - _sx_cred_cache["ts"] < SEARXNG_CREDS_REFRESH_DAYS * 86400:
-        return cached
-    cred = SEARXNG_CRED
-    if not cred:
-        try:
-            from credgoo import get_api_key
+    if _sx_mem["creds"] and now - _sx_mem["ts"] < 3600:
+        return _sx_mem["creds"]
 
-            cred = get_api_key("searx") or ""
-        except Exception as e:
-            logging.error("searxng: credgoo resolution failed: %s", e)
-    parts = (cred or "").split("@")
-    if len(parts) < 3 or not parts[0]:
-        logging.error("searxng: credential has unexpected format (len %d parts)",
-                      len(parts))
-        return cached  # keep serving the stale creds rather than failing
-    creds = {"url": parts[0].rstrip("/"), "auth": (parts[1], parts[2])}
-    _sx_cred_cache["creds"] = creds
-    _sx_cred_cache["ts"] = now
-    return creds
+    state = _load_searxng_state()
+    if state and now - state.get("ts", 0) < SEARXNG_CREDS_REFRESH_DAYS * 86400:
+        creds = _parse_cred(state.get("cred", ""))
+        if creds:
+            _sx_mem.update(creds=creds, ts=now)
+            return creds
+
+    # TTL exceeded (or nothing persisted): re-pull via credgoo
+    logging.info("searxng: credential TTL exceeded — re-pulling via credgoo")
+    cred = ""
+    try:
+        from credgoo import get_api_key
+
+        cred = get_api_key("searx") or ""
+    except Exception as e:
+        logging.error("searxng: credgoo re-pull failed: %s", e)
+    parsed = _parse_cred(cred) if cred else None
+    if parsed:
+        _persist_searxng_state(cred, now)
+        _update_env_line(cred)
+        _sx_mem.update(creds=parsed, ts=now)
+        return parsed
+
+    # refresh failed — keep serving the stale credential rather than failing
+    if state:
+        creds = _parse_cred(state.get("cred", ""))
+        if creds:
+            _sx_mem.update(creds=creds, ts=now)
+            return creds
+    return None
 
 
 def _searxng_search(query: str, max_results: int):
