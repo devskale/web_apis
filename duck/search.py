@@ -156,6 +156,16 @@ def _ddgs_text(query: str, **kwargs):
     return None
 
 
+def debug_duck() -> dict:
+    import inspect
+    return {
+        "file": __file__,
+        "has_entry_warning": "searxng search called" in inspect.getsource(_searxng_search),
+        "search_has_sink": "search_debug.log" in inspect.getsource(search),
+        "creds_url": (_searxng_creds() or {}).get("url"),
+    }
+
+
 def search(query: str, num_results: int = 10, domain: str = 'at') -> list | None:
     """
     Perform a search using DuckDuckGo with domain mapping.
