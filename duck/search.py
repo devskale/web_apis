@@ -112,20 +112,24 @@ def _searxng_creds():
     return None
 
 
-def _searxng_search(query: str, max_results: int):
-    """Private SearXNG JSON API. Returns list[{url, description}] or None.
-    Also retried: the instance limiter occasionally serves HTML bursts."""
+def _searxng_search(query: str, max_results: int, time_range: str | None = None):
+    """Private SearXNG JSON API. Returns list[{title, url, description}]
+    or None. Also retried: the instance limiter occasionally serves HTML
+    bursts."""
     creds = _searxng_creds()
     logging.warning("searxng search called: creds=%s",
                     "ok" if creds else "NONE")
     if not creds:
         return None
+    params = {"q": query, "format": "json"}
+    if time_range:
+        params["time_range"] = time_range
     last_err = "no attempt"
     for attempt in range(2):
         try:
             resp = requests.get(
                 f"{creds['url']}/search",
-                params={"q": query, "format": "json"},
+                params=params,
                 auth=creds["auth"],
                 timeout=15,
             )
@@ -135,8 +139,10 @@ def _searxng_search(query: str, max_results: int):
                 last_err = f"HTTP {resp.status_code}"
             else:
                 rows = resp.json().get("results", [])[:max_results]
-                return [{"url": r.get("url", ""),
-                         "description": r.get("content") or ""} for r in rows]
+                return [{"title": r.get("title", ""),
+                         "url": r.get("url", ""),
+                         "description": r.get("content") or ""}
+                        for r in rows]
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
         if attempt == 0:

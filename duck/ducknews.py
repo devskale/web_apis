@@ -4,6 +4,7 @@ import logging
 import os
 import time
 
+from duck.search import _searxng_search
 from duck.throttle import DdgThrottleTimeout, ddg_slot
 
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,28 @@ DEFAULT_BACKEND = (
     _raw_backends if _raw_backends in {"auto", "all"}
     else [b.strip() for b in _raw_backends.split(",") if b.strip()]
 )
+
+# SearXNG time_range values for ddgs timelimit letters
+_SX_TIME_RANGE = {"d": "day", "w": "week", "m": "month", "y": "year"}
+
+
+def _searxng_web(final_query: str, max_results: int, timelimit: str | None):
+    """Primary: private SearXNG (lubu) aggregates google/brave/startpage
+    from the home IP — not bot-blocked like the amd datacenter IP. Query
+    operators (site:, filetype:, -term, "...") pass straight through.
+    Returns ddgs-shaped rows, or None when SearXNG is unavailable.
+    """
+    rows = _searxng_search(
+        final_query, max_results,
+        time_range=_SX_TIME_RANGE.get(timelimit) if timelimit else None,
+    )
+    if rows is None:
+        return None
+    return [
+        {"title": r.get("title", ""), "href": r.get("url", ""),
+         "body": r.get("description", "")}
+        for r in rows
+    ]
 
 
 def _ddgs_call(fn, **kwargs):
@@ -97,6 +120,11 @@ def search_web(
         if t:
             terms.append(f"-{t}")
     final_query = " ".join(terms)
+
+    # SearXNG first (google/brave/startpage via lubu); ddgs/yahoo fallback
+    sx = _searxng_web(final_query, max_results, timelimit)
+    if sx is not None:
+        return sx
 
     kwargs = {
         "region": region,

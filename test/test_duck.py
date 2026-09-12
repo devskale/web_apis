@@ -40,7 +40,8 @@ def test_search_news_returns_none_after_exhausted_retries():
 
 
 def test_search_web_builds_operators():
-    with mock.patch("duck.ducknews.DDGS") as ddgs:
+    with mock.patch("duck.ducknews.DDGS") as ddgs, \
+            mock.patch("duck.ducknews._searxng_search", return_value=None):
         ddgs.return_value.text.return_value = [
             {"title": "t", "href": "u", "body": "b"}]
         results = search_web("fastapi", site="github.com",
@@ -52,12 +53,36 @@ def test_search_web_builds_operators():
 
 
 def test_search_translate_restricts_site():
-    with mock.patch("duck.ducknews.DDGS") as ddgs:
+    with mock.patch("duck.ducknews.DDGS") as ddgs, \
+            mock.patch("duck.ducknews._searxng_search", return_value=None):
         ddgs.return_value.text.return_value = []
         search_translate("hello", "de")
 
     query = ddgs.return_value.text.call_args.kwargs["query"]
     assert query.endswith("site:translate.google.com")
+
+
+def test_search_web_prefers_searxng():
+    # searxng serves -> ddgs never called
+    with mock.patch("duck.ducknews._searxng_search") as sx, \
+            mock.patch("duck.ducknews.DDGS") as ddgs:
+        sx.return_value = [{"title": "T", "url": "https://sx",
+                            "description": "d"}]
+        results = search_web("query", site="github.com")
+    assert results == [{"title": "T", "href": "https://sx", "body": "d"}]
+    ddgs.return_value.text.assert_not_called()
+    assert sx.call_args[0][0] == "query site:github.com"
+    assert sx.call_args[1].get("time_range") is None
+
+
+def test_search_web_falls_back_to_ddgs_when_searxng_down():
+    with mock.patch("duck.ducknews._searxng_search", return_value=None), \
+            mock.patch("duck.ducknews.DDGS") as ddgs:
+        ddgs.return_value.text.return_value = [
+            {"title": "t", "href": "u", "body": "b"}]
+        results = search_web("query")
+    assert results and results[0]["href"] == "u"
+    ddgs.return_value.text.assert_called_once()
 
 
 def test_searxng_primary_and_ddg_fallback():
@@ -73,7 +98,7 @@ def test_searxng_primary_and_ddg_fallback():
         get.return_value.json.return_value = {
             "results": [{"title": "t", "url": "https://x", "content": "c"}]}
         results = duck_search_mod.search("anything", 5, "at")
-    assert results == [{"url": "https://x", "description": "c"}]
+    assert results == [{"title": "t", "url": "https://x", "description": "c"}]
     ddgs.return_value.text.assert_not_called()
 
     # searxng down -> ddgs fallback serves
