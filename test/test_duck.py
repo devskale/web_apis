@@ -1,7 +1,18 @@
 """Unit tests for the duck search wrappers (DDGS is mocked - no network)."""
+import os
+
+import pytest
 from unittest import mock
 
 from duck.ducknews import search_news, search_web, search_translate
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cache_and_breaker(tmp_path, monkeypatch):
+    """Point cache + breaker state at a temp dir so tests never share
+    results and never pollute the real duck/data/ state."""
+    monkeypatch.setattr("duck.cache._CACHE_DIR", str(tmp_path / "qc"))
+    monkeypatch.setattr("duck.router._BREAKER_PATH", str(tmp_path / "br.json"))
 
 
 def test_search_news_returns_results():
@@ -62,27 +73,59 @@ def test_search_translate_restricts_site():
     assert query.endswith("site:translate.google.com")
 
 
-def test_search_web_prefers_searxng():
-    # searxng serves -> ddgs never called
-    with mock.patch("duck.ducknews._searxng_search") as sx, \
-            mock.patch("duck.ducknews.DDGS") as ddgs:
-        sx.return_value = [{"title": "T", "url": "https://sx",
-                            "description": "d"}]
-        results = search_web("query", site="github.com")
-    assert results == [{"title": "T", "href": "https://sx", "body": "d"}]
-    ddgs.return_value.text.assert_not_called()
-    assert sx.call_args[0][0] == "query site:github.com"
-    assert sx.call_args[1].get("time_range") is None
-
-
-def test_search_web_falls_back_to_ddgs_when_searxng_down():
-    with mock.patch("duck.ducknews._searxng_search", return_value=None), \
-            mock.patch("duck.ducknews.DDGS") as ddgs:
+def test_search_web_primary_ddgs_default():
+    # Default chain: ddgs first — searxng (lubu) is never touched.
+    with mock.patch("duck.ducknews.DDGS") as ddgs, \
+            mock.patch("duck.ducknews._searxng_search") as sx:
         ddgs.return_value.text.return_value = [
             {"title": "t", "href": "u", "body": "b"}]
         results = search_web("query")
-    assert results and results[0]["href"] == "u"
-    ddgs.return_value.text.assert_called_once()
+    assert results[0]["href"] == "u"
+    sx.assert_not_called()
+
+
+def test_search_web_primary_searxng_when_configured(monkeypatch):
+    monkeypatch.setattr("duck.ducknews._PRIMARY", "searxng")
+    with mock.patch("duck.ducknews.DDGS") as ddgs, \
+            mock.patch("duck.ducknews._searxng_search") as sx:
+        sx.return_value = [{"title": "T", "url": "https://sx", "description": "d"}]
+        results = search_web("query")
+    assert results == [{"title": "T", "href": "https://sx", "body": "d"}]
+    ddgs.return_value.text.assert_not_called()
+
+
+def test_search_web_searxng_fallback_when_ddgs_fails():
+    # ddgs returns None (backend error after retries) -> searxng serves.
+    with mock.patch("duck.ducknews.DDGS") as ddgs, \
+            mock.patch("duck.ducknews._searxng_search") as sx, \
+            mock.patch("duck.ducknews.time.sleep"):
+        ddgs.return_value.text.return_value = None
+        ddgs.return_value.text.side_effect = RuntimeError("yahoo EOF")
+        sx.return_value = [{"title": "T", "url": "https://sx", "description": "d"}]
+        results = search_web("query")
+    assert results[0]["href"] == "https://sx"
+
+
+def test_search_web_empty_ddgs_rechecked_on_searxng():
+    # [] from the single-engine primary is not final — searxng's
+    # aggregated verdict (rows) wins.
+    with mock.patch("duck.ducknews.DDGS") as ddgs, \
+            mock.patch("duck.ducknews._searxng_search") as sx:
+        ddgs.return_value.text.return_value = []
+        sx.return_value = [{"title": "T", "url": "https://sx", "description": "d"}]
+        results = search_web("gibberish query")
+    assert results[0]["href"] == "https://sx"
+
+
+def test_search_web_cache_prevents_second_backend_call():
+    with mock.patch("duck.ducknews.DDGS") as ddgs, \
+            mock.patch("duck.ducknews._searxng_search"):
+        ddgs.return_value.text.return_value = [
+            {"title": "t", "href": "u", "body": "b"}]
+        first = search_web("cached query")
+        second = search_web("cached query")
+    assert first == second
+    assert ddgs.return_value.text.call_count == 1
 
 
 def test_searxng_primary_and_ddg_fallback():

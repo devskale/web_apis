@@ -4,6 +4,8 @@ import logging
 import os
 import time
 
+from duck.cache import cache_get, cache_put
+from duck.router import record_searxng, searxng_available
 from duck.search import _searxng_search
 from duck.throttle import DdgThrottleTimeout, ddg_slot
 
@@ -24,6 +26,11 @@ DEFAULT_BACKEND = (
     _raw_backends if _raw_backends in {"auto", "all"}
     else [b.strip() for b in _raw_backends.split(",") if b.strip()]
 )
+
+# Backend priority for search_web: "ddgs" (amd-local, yahoo) or "searxng"
+# (lubu, google/brave/startpage). Owner preference: keep amd's own ddgs in
+# the hot path, lubu as the safety net.
+_PRIMARY = os.environ.get("DUCK_PRIMARY", "ddgs").strip().lower()
 
 # SearXNG time_range values for ddgs timelimit letters
 _SX_TIME_RANGE = {"d": "day", "w": "week", "m": "month", "y": "year"}
@@ -121,10 +128,12 @@ def search_web(
             terms.append(f"-{t}")
     final_query = " ".join(terms)
 
-    # SearXNG first (google/brave/startpage via lubu); ddgs/yahoo fallback
-    sx = _searxng_web(final_query, max_results, timelimit)
-    if sx is not None:
-        return sx
+    # Cache first — agents repeat identical queries constantly.
+    cache_params = {"max_results": max_results, "region": region,
+                    "safesearch": safesearch, "page": page}
+    cached = cache_get(final_query, timelimit, **cache_params)
+    if cached is not None:
+        return cached
 
     kwargs = {
         "region": region,
@@ -140,8 +149,29 @@ def search_web(
     if verify is not None:
         kwargs["verify"] = verify
 
-    # None = backend error (after retries); [] = genuinely empty result
-    return _ddgs_call(DDGS().text, query=final_query, **kwargs)
+    # Backend chain. Primary: ddgs on amd (yahoo engine) — datacenter IP,
+    # answers in ~1s, TLS-EOF flakes absorbed by retries. Fallback: private
+    # SearXNG (lubu) aggregating google/brave/startpage from the home IP,
+    # breaker-protected so a dark lubu costs ~0s instead of 2×15s timeouts.
+    # Order via DUCK_PRIMARY=ddgs|searxng. Empty results from the primary
+    # are re-checked on the fallback (single engine ≠ final verdict), but
+    # a transport failure never masks an earlier definitive [].
+    empty = None
+    for name in ("ddgs", "searxng") if _PRIMARY == "ddgs" else ("searxng", "ddgs"):
+        if name == "ddgs":
+            rows = _ddgs_call(DDGS().text, query=final_query, **kwargs)
+        elif searxng_available():
+            rows = _searxng_web(final_query, max_results, timelimit)
+            record_searxng(rows is not None)
+        else:
+            logging.info("searxng skipped (breaker open)")
+            continue
+        if rows:
+            cache_put(final_query, timelimit, rows, **cache_params)
+            return rows
+        if rows is not None and empty is None:
+            empty = rows
+    return empty  # [] (definitively empty) or None (all backends failed)
 
 
 def search_translate(topic, to_language):
