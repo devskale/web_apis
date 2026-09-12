@@ -726,6 +726,13 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
   "https://your-server/api/duck/search?query=fastapi+site:github.com&max_results=10"
 ```
 
+**Throttling:** DDG soft-blocks the datacenter IP when searches arrive in
+bursts, so all ddgs calls (`/duck/search`, `/duck/news`, translate, and the
+SearXNG fallback path) are serialized **box-wide** via flock with a minimum
+gap between call starts. Saturated queues fail fast (502) instead of piling
+on. Tunables: `DDG_MIN_INTERVAL` (default `1.2`s), `DDG_MAX_WAIT` (default
+`45`s).
+
 ### GET /duck/translate
 
 **Parameters:** `text` (required), `to_language` (required, e.g. `de`, `fr`, `es`)

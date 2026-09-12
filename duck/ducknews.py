@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 import logging
 import time
 
+from duck.throttle import DdgThrottleTimeout, ddg_slot
+
 logging.basicConfig(level=logging.INFO)
 
 # ddgs is flaky in bursts (DNS hiccups, soft blocks): retry before giving up.
@@ -14,7 +16,12 @@ def _ddgs_call(fn, **kwargs):
     last_exc = None
     for attempt in range(_DDGS_ATTEMPTS):
         try:
-            return fn(**kwargs)
+            with ddg_slot():
+                return fn(**kwargs)
+        except DdgThrottleTimeout as e:
+            # Box saturated: retrying would only deepen the queue — fail fast.
+            logging.error("DDGS throttle timeout (queue full): %s", e)
+            return None
         except Exception as e:
             last_exc = e
             if attempt < _DDGS_ATTEMPTS - 1:
