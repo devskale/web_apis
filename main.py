@@ -396,7 +396,8 @@ def get_duck_search(
     )
     if results is None:
         raise HTTPException(
-            status_code=502, detail="search backend temporarily unavailable")
+            status_code=502,
+            detail="search backend temporarily unavailable (trace=b1)")
     if not results:
         raise HTTPException(status_code=404, detail="No results found.")
     return {"results": results}
