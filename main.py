@@ -235,6 +235,7 @@ def debug_duck2():
         "mtime": __import__("os").path.getmtime(m.__file__),
         "has_entry_warning": "searxng search called" in inspect.getsource(m._searxng_search),
         "search_is_primary_searxng": "results = _searxng_search" in inspect.getsource(m.search),
+    "live_searxng": (lambda r: len(r) if r is not None else "None")(m._searxng_search("probe", 3)),
     }
 
 
