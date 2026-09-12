@@ -12,14 +12,13 @@ logging.basicConfig(level=logging.INFO)
 # None signals a backend error; [] means the search genuinely returned nothing.
 _DDGS_ATTEMPTS = 3
 
-# Default engines. ddgs "auto" wastes ~8s per attempt on engines that
-# hard-fail from the amd datacenter IP (duckduckgo soft-blocked, brave/
-# mojeek/yahoo blocked, google/grokipedia IPv6-unreachable, wikipedia
-# DNS-broken for wt-wt) — and one failing engine can raise for the whole
-# call. bing+yandex are proven to work; the LIST form merges both (the
-# comma string silently falls back to auto). Env: DDG_BACKENDS="bing,yandex"
-# or "auto"/"all".
-_raw_backends = os.environ.get("DDG_BACKENDS", "bing,yandex").strip()
+# Default engines. ddgs 9.16 "auto" lets one failing engine (duckduckgo
+# timeout, brave/google 429, mojeek 403, wikipedia DNS-broken for wt-wt)
+# dominate or kill the whole call. Probed per-engine from the amd IP
+# (2026-09-12): ONLY yahoo answers reliably (~1s, bing-powered index);
+# startpage parses empty, grokipedia is thin. Env: DDG_BACKENDS="yahoo"
+# (comma list) or "auto"/"all".
+_raw_backends = os.environ.get("DDG_BACKENDS", "yahoo").strip()
 DEFAULT_BACKEND = (
     _raw_backends if _raw_backends in {"auto", "all"}
     else [b.strip() for b in _raw_backends.split(",") if b.strip()]
@@ -37,6 +36,10 @@ def _ddgs_call(fn, **kwargs):
             logging.error("DDGS throttle timeout (queue full): %s", e)
             return None
         except Exception as e:
+            # All engines answered but found nothing — that is an empty
+            # result, not a backend failure. Retrying would not change it.
+            if "No results found" in str(e):
+                return []
             last_exc = e
             if attempt < _DDGS_ATTEMPTS - 1:
                 time.sleep(1 + attempt)
