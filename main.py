@@ -278,6 +278,9 @@ def lynx_fetch(url: str, token: str = Depends(verify_token)):
 def w3m_fetch(query: str, num_results: int = 10, domain: str = "at", token: str = Depends(verify_token)):
     try:
         content = duck_search_domain(query, num_results, domain)
+        if content is None:
+            raise HTTPException(
+                status_code=502, detail="search backend temporarily unavailable")
         return {"content": content}
     except RuntimeError as e:
         logging.error("/w3m_google failed for %r: %s", query, e)
@@ -321,6 +324,9 @@ def get_news(
         proxy=proxy,
         verify=verify,
     )
+    if results is None:
+        raise HTTPException(
+            status_code=502, detail="search backend temporarily unavailable")
     if not results:
         raise HTTPException(status_code=404, detail="No news found.")
     return {"results": results}
@@ -388,6 +394,9 @@ def get_duck_search(
         filetype=filetype,
         inurl=inurl,
     )
+    if results is None:
+        raise HTTPException(
+            status_code=502, detail="search backend temporarily unavailable")
     if not results:
         raise HTTPException(status_code=404, detail="No results found.")
     return {"results": results}
@@ -396,6 +405,9 @@ def get_duck_search(
 @app.get("/duck/translate")
 def get_duck_translation(text: str, to_language: str, token: str = Depends(verify_token)):
     results = search_translate(text, to_language)
+    if results is None:
+        raise HTTPException(
+            status_code=502, detail="search backend temporarily unavailable")
     if not results:
         raise HTTPException(status_code=404, detail="No translation found.")
     return {"results": results}

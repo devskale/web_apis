@@ -1,32 +1,45 @@
 from ddgs import DDGS
 from datetime import datetime, timezone
 import logging
+import time
 
 logging.basicConfig(level=logging.INFO)
 
+# ddgs is flaky in bursts (DNS hiccups, soft blocks): retry before giving up.
+# None signals a backend error; [] means the search genuinely returned nothing.
+_DDGS_ATTEMPTS = 3
+
+
+def _ddgs_call(fn, **kwargs):
+    last_exc = None
+    for attempt in range(_DDGS_ATTEMPTS):
+        try:
+            return fn(**kwargs)
+        except Exception as e:
+            last_exc = e
+            if attempt < _DDGS_ATTEMPTS - 1:
+                time.sleep(1 + attempt)
+    logging.error("DDGS failed after %d attempts: %s", _DDGS_ATTEMPTS, last_exc)
+    return None
+
 
 def search_news(topic, region="wt-wt", safesearch="off", timelimit="m", max_results=8, page=None, backend=None, proxy=None, verify=True):
-    try:
-        kwargs = {
-            "query": topic,
-            "region": region,
-            "safesearch": safesearch,
-            "timelimit": timelimit,
-            "max_results": max_results,
-        }
-        if page is not None:
-            kwargs["page"] = page
-        if backend is not None:
-            kwargs["backend"] = backend
-        if proxy is not None:
-            kwargs["proxy"] = proxy
-        if verify is not None:
-            kwargs["verify"] = verify
-        results = DDGS().news(**kwargs)
-        return results
-    except Exception as e:
-        logging.error(f"Error searching for news: {e}")
-        return []
+    kwargs = {
+        "query": topic,
+        "region": region,
+        "safesearch": safesearch,
+        "timelimit": timelimit,
+        "max_results": max_results,
+    }
+    if page is not None:
+        kwargs["page"] = page
+    if backend is not None:
+        kwargs["backend"] = backend
+    if proxy is not None:
+        kwargs["proxy"] = proxy
+    if verify is not None:
+        kwargs["verify"] = verify
+    return _ddgs_call(DDGS().news, **kwargs)
 
 
 def search_web(
@@ -45,44 +58,40 @@ def search_web(
     filetype=None,
     inurl=None,
 ):
-    try:
-        exclude_terms = exclude_terms or []
-        terms = []
-        if exact:
-            terms.append(f'"{query}"')
-        else:
-            terms.append(query)
-        if site:
-            terms.append(f"site:{site}")
-        if filetype:
-            terms.append(f"filetype:{filetype}")
-        if inurl:
-            terms.append(f"inurl:{inurl}")
-        for t in exclude_terms:
-            if t:
-                terms.append(f"-{t}")
-        final_query = " ".join(terms)
+    exclude_terms = exclude_terms or []
+    terms = []
+    if exact:
+        terms.append(f'"{query}"')
+    else:
+        terms.append(query)
+    if site:
+        terms.append(f"site:{site}")
+    if filetype:
+        terms.append(f"filetype:{filetype}")
+    if inurl:
+        terms.append(f"inurl:{inurl}")
+    for t in exclude_terms:
+        if t:
+            terms.append(f"-{t}")
+    final_query = " ".join(terms)
 
-        kwargs = {
-            "region": region,
-            "safesearch": safesearch,
-            "timelimit": timelimit,
-            "max_results": max_results,
-        }
-        if backend is not None:
-            kwargs["backend"] = backend
-        if page is not None:
-            kwargs["page"] = page
-        if proxy is not None:
-            kwargs["proxy"] = proxy
-        if verify is not None:
-            kwargs["verify"] = verify
+    kwargs = {
+        "region": region,
+        "safesearch": safesearch,
+        "timelimit": timelimit,
+        "max_results": max_results,
+    }
+    if backend is not None:
+        kwargs["backend"] = backend
+    if page is not None:
+        kwargs["page"] = page
+    if proxy is not None:
+        kwargs["proxy"] = proxy
+    if verify is not None:
+        kwargs["verify"] = verify
 
-        results = DDGS().text(final_query, **kwargs)
-        return results
-    except Exception as e:
-        logging.error(f"Error searching the web: {e}")
-        return []
+    # None = backend error (after retries); [] = genuinely empty result
+    return _ddgs_call(DDGS().text, query=final_query, **kwargs)
 
 
 def search_translate(topic, to_language):
