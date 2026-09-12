@@ -114,6 +114,8 @@ def _searxng_search(query: str, max_results: int):
     """Private SearXNG JSON API. Returns list[{url, description}] or None.
     Also retried: the instance limiter occasionally serves HTML bursts."""
     creds = _searxng_creds()
+    logging.warning("searxng search called: creds=%s",
+                    "ok" if creds else "NONE")
     if not creds:
         return None
     last_err = "no attempt"
