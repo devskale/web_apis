@@ -32,26 +32,32 @@ def _searxng_creds():
 
 
 def _searxng_search(query: str, max_results: int):
-    """Private SearXNG JSON API. Returns list[{url, description}] or None."""
+    """Private SearXNG JSON API. Returns list[{url, description}] or None.
+    Also retried: the instance limiter occasionally serves HTML bursts."""
     creds = _searxng_creds()
     if not creds:
         return None
-    try:
-        resp = requests.get(
-            f"{creds['url']}/search",
-            params={"q": query, "format": "json"},
-            auth=creds["auth"],
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            logging.error("searxng fallback HTTP %s", resp.status_code)
-            return None
-        rows = resp.json().get("results", [])[:max_results]
-        return [{"url": r.get("url", ""),
-                 "description": r.get("content") or ""} for r in rows]
-    except Exception as e:
-        logging.error("searxng fallback failed: %s", e)
-        return None
+    last_err = "no attempt"
+    for attempt in range(2):
+        try:
+            resp = requests.get(
+                f"{creds['url']}/search",
+                params={"q": query, "format": "json"},
+                auth=creds["auth"],
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                last_err = f"HTTP {resp.status_code}"
+            else:
+                rows = resp.json().get("results", [])[:max_results]
+                return [{"url": r.get("url", ""),
+                         "description": r.get("content") or ""} for r in rows]
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+        if attempt == 0:
+            time.sleep(1)
+    logging.error("searxng fallback failed: %s", last_err)
+    return None
 
 
 def _ddgs_text(query: str, **kwargs):
