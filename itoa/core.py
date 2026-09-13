@@ -41,7 +41,7 @@ def image_to_ascii(image_file, width=100, color=False, mode="Standard"):
     Args:
         image_file: The image file object (bytes or path).
         width: The desired width of the output ASCII.
-        color: Whether to return colorized HTML (not implemented yet, returns monochrome).
+        color: Whether to prefix each character with an ANSI true-color escape sequence.
         mode: The ASCII character palette to use.
 
     Returns:

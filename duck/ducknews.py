@@ -1,5 +1,4 @@
 from ddgs import DDGS
-from datetime import datetime, timezone
 import logging
 import os
 import time
@@ -182,20 +181,3 @@ def search_translate(topic, to_language):
     except Exception as e:
         logging.error(f"Error translating: {e}")
         return []
-
-
-def age_of_article(date):
-    article_date = datetime.fromisoformat(date.replace("Z", "+00:00"))
-    current_date = datetime.now(timezone.utc)
-    age_delta = current_date - article_date
-    return f"+{age_delta.days}d"
-
-
-def format_results_news(results):
-    for result in results:
-        result['age'] = age_of_article(result['date'])
-    return sorted(results, key=lambda x: x['age'])
-
-
-def format_results_translate(results):
-    return [results]
