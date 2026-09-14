@@ -170,6 +170,10 @@ def _run_llama_job(job_id: str, pdf_path: str, filename: str, tier: str,
     to the OS immediately instead of at some later allocation. Every stage
     checks the hard job deadline so no zombie survives it."""
     job = _load_job(job_id)
+    if job is None:
+        # job file vanished (purge race) — nothing to do
+        _cleanup_pdf(pdf_path)
+        return
 
     # 1. never wait for the conversion slot past the deadline (zero heap while
     #    queued - the payload is on disk)
@@ -234,7 +238,7 @@ def _run_llama_job(job_id: str, pdf_path: str, filename: str, tier: str,
     finally:
         _llama_slots.release()
         _cleanup_pdf(pdf_path)
-        del data
+        data = None  # may already be unbound (del in try) — don't del again
         gc.collect()
 
 
