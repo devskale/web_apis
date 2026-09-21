@@ -38,7 +38,12 @@ def _mask_auth(header: str | None) -> str:
     return parts[0]
 
 _rate_store: dict[str, list[float]] = defaultdict(list)
+_page_rate_store: dict[str, list[float]] = defaultdict(list)
 _RATE_LIMIT = 30  # requests per window, per worker process
+_PAGE_RATE_LIMIT = 600  # SEO-page renders (/firmenbuch/page/*): cache-only
+                        # DB-reads, kein Live-API — hoher eigener Deckel, sonst
+                        # 429-Stürme bei Googlebot-Crawls (GSC "Serverfehler
+                        # 5xx"-Befund 2026-09-21; 30/min galt vorher auch dafür)
 _RATE_WINDOW = 60  # seconds
 _last_prune = 0.0
 
@@ -54,15 +59,18 @@ def _rate_key(request: Request) -> str:
     return "ip:" + client
 
 
-def _check_rate_limit(key: str) -> bool:
+def _check_rate_limit(key: str, *, store: dict[str, list[float]] | None = None,
+                      limit: int = 0) -> bool:
     """Returns True if request is allowed, False if rate limited."""
+    bucket = _rate_store if store is None else store
+    cap = limit or _RATE_LIMIT
     now = time.time()
-    recent = [t for t in _rate_store[key] if now - t < _RATE_WINDOW]
-    if len(recent) >= _RATE_LIMIT:
-        _rate_store[key] = recent
+    recent = [t for t in bucket[key] if now - t < _RATE_WINDOW]
+    if len(recent) >= cap:
+        bucket[key] = recent
         return False
     recent.append(now)
-    _rate_store[key] = recent
+    bucket[key] = recent
     return True
 
 
@@ -136,7 +144,14 @@ async def log_requests(request: Request, call_next):
     # Rate limit check for firmenbuch endpoints
     limited = False
     if "/firmenbuch/" in request.url.path:
-        limited = not _check_rate_limit(_rate_key(request))
+        if "/firmenbuch/page/" in request.url.path:
+            # server-gerenderte SEO-Seiten — cache-only DB-reads, eigenes
+            # Budget (siehe _PAGE_RATE_LIMIT)
+            limited = not _check_rate_limit(_rate_key(request),
+                                            store=_page_rate_store,
+                                            limit=_PAGE_RATE_LIMIT)
+        else:
+            limited = not _check_rate_limit(_rate_key(request))
     if limited:
         response = JSONResponse(
             status_code=429,
