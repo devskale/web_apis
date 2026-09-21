@@ -9,5 +9,7 @@ hvd_cli
 fb_cli
 *.log
 *.log.*
+logs/
 data/
+.wko_state.json
 itoa_referenceapp
