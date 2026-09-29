@@ -74,6 +74,10 @@ os.makedirs(JOBS_DIR, exist_ok=True)
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
 _llama_slots = threading.BoundedSemaphore(LLAMA_JOB_SLOTS)
+# Live job worker threads, kept in a registry so tests can join them before
+# wiping shared state (JOBS_DIR) and prod can avoid zombie daemons on shutdown.
+_job_threads: list[threading.Thread] = []
+_job_threads_lock = threading.Lock()
 
 
 def _job_path(job_id: str) -> str:
@@ -547,10 +551,14 @@ def pdf_to_md(
                 fh.write(data)
             del data
             gc.collect()
-            threading.Thread(
+            worker = threading.Thread(
                 target=_run_llama_job,
                 args=(job_id, pdf_path, filename, tier, language, transfer),
-                daemon=True).start()
+                daemon=True)
+            with _job_threads_lock:
+                _job_threads[:] = [t for t in _job_threads if t.is_alive()]
+                _job_threads.append(worker)
+            worker.start()
             return JSONResponse(status_code=202, content={
                 "job_id": job_id, "status": "queued", "pages": page_count,
                 "poll": _public_base(request) + f"/pdf/jobs/{job_id}",

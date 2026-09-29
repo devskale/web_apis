@@ -27,12 +27,56 @@ def _fast(monkeypatch):
     monkeypatch.setattr(pdf_router, "_llama_api_key", lambda: "llx-test")
     monkeypatch.setattr(pdf_router, "_llamaparse_to_markdown",
                         lambda data, fn, tier, lang: "# converted")
+    # Leichen aus früheren Läufen dürfen einen 429 (MAX_JOBS zählt
+    # queued+running+done) nie auslösen — der Deckel gilt pro Test.
+    monkeypatch.setattr(pdf_router, "MAX_JOBS", 10_000)
+    _drain_slots()
+    _clear_jobs_dir()
+    yield
+    # Joint die Worker-Threads BEVOR monkeypatch die gemockten Callables
+    # zurücksetzt. Ohne das Join läuft ein Thread aus Test N weiter, während
+    # Test N+1 bereits JOBS_DIR geleert und den echten (netzwerkfähigen!)
+    # _llamaparse_to_markdown wiederhergestellt hat — der Thread hängt dann am
+    # echten LlamaParse und schreibt seine Job-Datei zurück in das geleerte
+    # Verzeichnis. Die Leiche treibt _count_jobs() Richtung MAX_JOBS und
+    # flaked 202/429- und done-Assertions nondeterministisch.
+    for t in list(pdf_router._job_threads):
+        t.join(timeout=10)
+    pdf_router._job_threads.clear()
+    _drain_slots()
+    _clear_jobs_dir()
+
+
+def _drain_slots():
+    """Release the 1-capacity conversion semaphore until it is fully free.
+
+    Kapazität 1, freigegeben im Worker-finally. Unter Last (langsame Box) kann
+    ein Worker den Slot länger halten als der Join timeout — ohne Drain wartet
+    der nächste Test-Job bis zum acquire-timeout (5s) und das Poll-Budget des
+    Tests läuft ab, während der Job noch 'queued' ist (der Flake).
+    """
+    while pdf_router._llama_slots._value < pdf_router.LLAMA_JOB_SLOTS:
+        pdf_router._llama_slots.release()
+
+
+def _clear_jobs_dir():
     for name in os.listdir(pdf_router.JOBS_DIR):
         os.unlink(os.path.join(pdf_router.JOBS_DIR, name))
 
 
-def _wait_done(job_id: str, tries: int = 100):
-    for _ in range(tries):
+def _wait_done(job_id: str, tries: int = 1500):
+    """Poll until terminal, with enough budget to survive a slow worker.
+
+    The conversion slot is a module-level semaphore with capacity 1: when a
+    previous test's worker is still holding it, the next job waits in
+    ``acquire(timeout=5)`` BEFORE it even starts — the poll budget must cover
+    that stall, otherwise the test reads "queued" and asserts on the wrong
+    state (this was the flake). 1500 x 10ms = 15 s — deliberately generous:
+    _wait_done returns the moment the job is terminal, the budget only has to
+    cover the worst case.
+    """
+    deadline = time.time() + tries * 0.01
+    while time.time() < deadline:
         r = client.get(f"/pdf/jobs/{job_id}", headers=TOKEN)
         body = r.json()
         if body["status"] in ("done", "failed"):
