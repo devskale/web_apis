@@ -106,9 +106,9 @@ from itoa.router import router as itoa_router
 # Setup logger with RotatingFileHandler
 access_logger = logging.getLogger("accessLogger")
 access_logger.setLevel(logging.INFO)
-handler = RotatingFileHandler("api.log", maxBytes=4096, backupCount=1)
+handler = RotatingFileHandler("api.log", maxBytes=1_048_576, backupCount=3)
 formatter = logging.Formatter(
-    "%(asctime)s - %(client_ip)s - %(method)s - %(path)s - %(auth)s - %(params)s")
+    "%(asctime)s - %(client_ip)s - %(method)s - %(path)s - %(auth)s - %(params)s - %(status)s")
 handler.setFormatter(formatter)
 access_logger.addHandler(handler)
 
@@ -139,6 +139,24 @@ app.add_middleware(
 # Logging middleware to log each access
 
 
+def _auth_for_log(header: str | None, status: int) -> str:
+    """Log-safe auth marker, distinguishing a real rejection from a public call.
+
+    A token-less request is an auth FAILURE only when the endpoint actually
+    demanded a token and rejected this one (401). Public endpoints such as
+    /api/duck/* accept token-less traffic and answer 200 — logging those as
+    "no-auth" made fail2ban's api-auth jail ban legitimate callers (5 searches
+    in 10 min = 30-day ban, both directions: an inbound ban also kills the
+    SYN-ACKs we send back). A token-less call is therefore marked "no-auth" only
+    on a 401; everywhere else it becomes "no-auth-ok" and cannot match the
+    failregex.
+    """
+    marker = _mask_auth(header)
+    if marker == "no-auth" and status != 401:
+        return "no-auth-ok"
+    return marker
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     # Rate limit check for firmenbuch endpoints
@@ -166,8 +184,9 @@ async def log_requests(request: Request, call_next):
         "client_ip": request.client.host,
         "method": request.method,
         "path": request.url.path,
-        "auth": _mask_auth(request.headers.get("Authorization")),
+        "auth": _auth_for_log(request.headers.get("Authorization"), response.status_code),
         "params": str(request.query_params),
+        "status": response.status_code,
     }
     access_logger.info("", extra=log_data)
     return response
