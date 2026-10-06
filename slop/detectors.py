@@ -100,10 +100,14 @@ class EdgeStripe(Detector):
 
 
 class Pill(Detector):
-    """Pastel pill capsule: border-radius 999px + colored background."""
+    """Pastel pill capsule: border-radius 999px + colored background.
+
+    Info-level, not a gate: pills are a taste call (Johann 2026-10:
+    "pills sind ok") — reported, never blocks a share.
+    """
     id = 'pill'
     weight = 5
-    level = 'hard'
+    level = 'info'
 
     def detect(self, page):
         out = []
@@ -363,7 +367,7 @@ def run_all(page: PageModel) -> list[Finding]:
                 f'Tailwind pill classes (rounded-full + {m.group(0)})',
                 'class',
                 'use a small square dot + severity text instead of a tinted capsule',
-                'hard'))
+                'info'))
     return findings
 
 

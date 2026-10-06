@@ -219,9 +219,12 @@ def test_auditflow_fixture():
 # ── severity: hard vs info ───────────────────────────────────────────────────
 
 def test_hard_levels_are_card_accents():
-    """hardslop = decorative color on containers; everything else is info."""
+    """hardslop = decorative color on containers; everything else is info.
+
+    Pills are NOT hard (Johann 2026-10: "pills sind ok") — taste, not gate.
+    """
     assert EdgeStripe.level == 'hard'
-    assert Pill.level == 'hard'
+    assert Pill.level == 'info'
     assert CircleBadge.level == 'hard'
     assert PurpleCta.level == 'hard'
     for det in (GradientText, Glass, Glow, SlopFonts, AllCaps, StatBanner,
@@ -249,3 +252,36 @@ def test_purple_button_still_finding():
             '<button class="btn">Start</button>')
     fs = [f for f in _lint(html) if f.id == 'purple_cta']
     assert fs and fs[0].confidence >= 0.7 and fs[0].level == 'hard'
+
+
+# ── inline-style parsing (regression: silently dropped rules) ────────────────
+
+def test_inline_style_rules_are_class_aware():
+    """<div class="card" style="..."> must become a div.card rule.
+
+    Regression: the first attrs regex matched nothing, inline styles on
+    classed elements were silently dropped, and a purple 4px card stripe
+    sailed through as Clean.
+    """
+    page = PageModel.parse(
+        '<div class="card" style="border-left:4px solid var(--stt)">x</div>')
+    assert any(r.selector == 'div.card' for r in page.rules), (
+        'inline style on a classed element must be parsed as tag.class rule')
+
+
+def test_dgx_stack_fixture():
+    """Real page: 4px purple var() border-left on a card, inline-styled.
+
+    The muted violet (#5a4a8a, sat 0.30) is the same tell as loud purple —
+    the is_purple floor is 0.25. The 8px legend dot stays silent.
+    """
+    from pathlib import Path
+    fx = Path(__file__).parent / 'fixtures' / 'dgx-stack-sloppy.html'
+    fs = _lint(fx.read_text(encoding='utf-8'))
+    stripes = [f for f in fs if f.id == 'edge_stripe' and f.level == 'hard']
+    assert stripes and any(f.confidence >= 0.7 for f in stripes), (
+        'the inline 4px purple border-left on .card must be a hard finding')
+    assert any('5a4a8a' in f.evidence for f in stripes), (
+        f'expected the muted-violet stripe in evidence, got: {[s.evidence for s in stripes]}')
+    # the 8px legend dot must not fire purple_cta
+    assert not any(f.id == 'purple_cta' for f in fs)

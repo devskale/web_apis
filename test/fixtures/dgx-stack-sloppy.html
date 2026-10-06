@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DGX Spark — Inference-Stack Überblick</title>
+<style>
+  :root{
+    --paper:#faf7f2; --ink:#1c1a17; --muted:#6b6459;
+    --client:#2f6f6a; --proxy:#8a6d3b; --vllm:#3a5f8a; --stt:#5a4a8a;
+    --edge:#d9d2c5; --card:#fffdfa; --ok:#3d7a4e; --warn:#b08a2e; --bad:#a4453a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:64rem;margin:0 auto;padding:3rem 1.5rem 4rem}
+  header h1{font-size:1.7rem;margin:0 0 .2rem;letter-spacing:-.02em}
+  header p{margin:.2rem 0 2rem;color:var(--muted);font-size:.95rem}
+  .legend{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:1.6rem}
+  .legend span{display:inline-flex;align-items:center;gap:.45rem;font-size:.82rem;color:var(--muted)}
+  .dot{width:.7rem;height:.7rem;border-radius:2px;flex:none}
+  .diagram{display:flex;flex-direction:column;gap:0}
+  .stack{display:flex;flex-direction:column;gap:1rem}
+  .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem}
+  .card{background:var(--card);border:1px solid var(--edge);border-radius:10px;
+    padding:1rem 1.1rem;box-shadow:0 1px 2px rgba(28,26,23,.04)}
+  .card h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;
+    margin:0 0 .5rem;color:var(--muted)}
+  .card .name{font-weight:650;font-size:1.02rem;margin:0}
+  .card .detail{font-size:.86rem;color:var(--muted);margin:.25rem 0 0}
+  .card .meta{font-size:.8rem;color:var(--muted);margin-top:.55rem}
+  .card .meta b{color:var(--ink);font-weight:600}
+  .tag{display:inline-block;font-size:.72rem;font-weight:600;padding:.1rem .45rem;
+    border-radius:4px;margin-right:.35rem;color:#fff}
+  .t-client{background:var(--client)} .t-proxy{background:var(--proxy)}
+  .t-vllm{background:var(--vllm)} .t-stt{background:var(--stt)}
+  .pill{font-size:.72rem;font-weight:600;padding:.1rem .5rem;border-radius:999px;
+    border:1px solid var(--edge);color:var(--muted);margin-left:.3rem}
+  .pill.ok{color:var(--ok);border-color:var(--ok)}
+  .pill.warn{color:var(--warn);border-color:var(--warn)}
+  .pill.bad{color:var(--bad);border-color:var(--bad)}
+  .arrow{display:flex;align-items:center;justify-content:center;color:var(--muted);
+    font-size:.85rem;padding:.35rem 0;letter-spacing:.02em}
+  .arrow::before{content:"";width:0;height:0;border-left:7px solid var(--muted);
+    border-top:5px solid transparent;border-bottom:5px solid transparent}
+  .arrow span{margin-left:.5rem}
+  .note{font-size:.82rem;color:var(--muted);margin-top:.5rem}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+  .foot{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--edge);
+    font-size:.8rem;color:var(--muted)}
+  .kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.78rem;
+    background:#efe9df;padding:.1rem .35rem;border-radius:4px}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>DGX Spark — Inference-Stack</h1>
+    <p>Ein Blick auf den Stack: Client → Gateway → Modelle. Host <span class="kbd">zgx02-0c06</span> · GB10 · aarch64 · 20 Kerne · 121 GiB · 3.6 TB NVMe</p>
+  </header>
+
+  <div class="legend">
+    <span><i class="dot" style="background:var(--client)"></i> Client / Web</span>
+    <span><i class="dot" style="background:var(--proxy)"></i> Gateway</span>
+    <span><i class="dot" style="background:var(--vllm)"></i> vLLM (Chat/OCR/TTS)</span>
+    <span><i class="dot" style="background:var(--stt)"></i> STT/TTS (sherpa)</span>
+  </div>
+
+  <div class="stack">
+
+    <!-- Client -->
+    <div class="row">
+      <div class="card" style="border-left:4px solid var(--client)">
+        <h2>Client</h2>
+        <p class="name">Klark.one <span class="tag t-client">Web-App</span></p>
+        <p class="detail">Next.js 16 · Dashboard für Vergabeaudit</p>
+        <p class="meta"><b>Port 3000</b> · extern ✅ · <span class="kbd">kontext.one/klark0</span></p>
+      </div>
+      <div class="card" style="border-left:4px solid var(--client)">
+        <h2>Externer Zugriff</h2>
+        <p class="name">Router / VPN</p>
+        <p class="detail">Nur <b>3000</b> + <b>3001</b> von außen erreichbar</p>
+        <p class="meta">Öffentliche IP <span class="kbd">94.136.29.250</span> · alles andere nur lokal / SSH-Tunnel</p>
+      </div>
+    </div>
+
+    <div class="arrow"><span>Client → Gateway (Bearer-Auth)</span></div>
+
+    <!-- Gateway -->
+    <div class="row">
+      <div class="card" style="border-left:4px solid var(--proxy)">
+        <h2>Gateway</h2>
+        <p class="name">model-proxy <span class="tag t-proxy">Node.js</span></p>
+        <p class="detail">Reverse-Proxy · Bearer-Auth · Rate-Limit (25/min)</p>
+        <p class="meta"><b>Port 3001</b> · extern ✅ · <span class="kbd">model-proxy/src/server.js</span></p>
+      </div>
+      <div class="card">
+        <h2>Routing</h2>
+        <p class="name">Zwei Upstream-Pfade</p>
+        <p class="detail"><b>Chat</b> → vLLM 8000 · <b>STT/TTS</b> → sherpa 8010/8091</p>
+        <p class="meta">Statisch: <span class="kbd">/dashboard</span> <span class="kbd">/benchmarks</span> <span class="kbd">/tts-test</span></p>
+      </div>
+    </div>
+
+    <div class="arrow"><span>Gateway → Modell-Server</span></div>
+
+    <!-- Models -->
+    <div class="row">
+      <div class="card" style="border-left:4px solid var(--vllm)">
+        <h2>Chat-Modell</h2>
+        <p class="name">Qwen3.6-35B-A3B-NVFP4 <span class="tag t-vllm">vLLM</span></p>
+        <p class="detail">262k ctx · MTP-2 SpecDec · flashinfer · fp8 KV</p>
+        <p class="meta"><b>Port 8000</b> · Docker <span class="kbd">qwen36-b</span> · ~47 GB VRAM</p>
+      </div>
+      <div class="card" style="border-left:4px solid var(--vllm)">
+        <h2>OCR</h2>
+        <p class="name">Surya-OCR-2 <span class="tag t-vllm">vLLM</span></p>
+        <p class="detail">datalab-to/surya-ocr-2 · 18k ctx · bf16</p>
+        <p class="meta"><b>Port 8100</b> · <span class="kbd">surya-vllm-venv</span></p>
+      </div>
+      <div class="card" style="border-left:4px solid var(--vllm)">
+        <h2>TTS-Modell</h2>
+        <p class="name">Qwen3-TTS-12Hz-1.7B <span class="tag t-vllm">vLLM</span></p>
+        <p class="detail">omni · CustomVoice · 1.7B</p>
+        <p class="meta"><b>Port 8091</b> · Docker <span class="kbd">qwen3-tts</span></p>
+      </div>
+      <div class="card" style="border-left:4px solid var(--stt)">
+        <h2>STT + TTS (alt)</h2>
+        <p class="name">sherpa-onnx <span class="tag t-stt">sttts</span></p>
+        <p class="detail">Nemotron 3.5 ASR 0.6b · Supertonic-3</p>
+        <p class="meta"><b>Port 8010</b> · CPU · <span class="kbd">sttts/server.py</span></p>
+      </div>
+    </div>
+
+    <div class="arrow"><span>Modell-Server → Daten &amp; Infrastruktur</span></div>
+
+    <!-- Infra -->
+    <div class="grid2">
+      <div class="card">
+        <h2>Daten &amp; Infrastruktur</h2>
+        <p class="name">Lokal laufende Dienste</p>
+        <p class="detail">PostgreSQL <span class="kbd">5432</span> · Redis <span class="kbd">6379</span> · Robotni Task-Queue <span class="kbd">5555</span></p>
+        <p class="meta">DGX-Dashboard <span class="kbd">11000</span> · Rayfish-VPN <span class="kbd">9090</span> · CUPS <span class="kbd">631</span></p>
+      </div>
+      <div class="card">
+        <h2>Modelle auf Platte</h2>
+        <p class="name"><span class="kbd">~/models</span></p>
+        <p class="detail">Qwen3.6-35B-AWQ · Qwen3.8-Flash-Next-NVFP4 · Ternary-Bonsai-27B</p>
+        <p class="meta">3.6 TB NVMe · 539 GB belegt</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="foot">
+    <b>Hinweise:</b> vLLM (8000) läuft ohne Auth auf 0.0.0.0 — immer über model-proxy (3001) gehen.
+    GPU aktiv: 35B-EngineCore ~47 GB + df2md-Prozess. Quelle: <span class="kbd">ports.md</span> · <span class="kbd">hosting.md</span> · <span class="kbd">nvidia-smi</span> · <span class="kbd">ss -tlnp</span>.
+  </div>
+</div>
+</body>
+</html>

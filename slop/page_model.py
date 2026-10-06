@@ -45,14 +45,19 @@ class PageModel:
                 page.custom_props.setdefault(cm.group(1), cm.group(2).strip())
         # Inline style attributes become rules keyed by tag+classes, so
         # detectors can correlate a fill with the element's size context
-        # (a purple 8px dot is a category swatch, not a CTA).
+        # (a purple 8px dot is a category swatch, not a CTA). The attrs scan
+        # tolerates quoted values containing '>' and finds class/style in
+        # any order.
         for m in re.finditer(
-                r'<([a-zA-Z][a-zA-Z0-9]*)((?:[^>]\s)*)?\sstyle="([^"]*)"', src):
-            tag, attrs, style = m.group(1), m.group(2) or '', m.group(3)
-            cm = re.search(r'class="([^"]*)"', attrs)
-            classes = cm.group(1).replace('"', '').split() if cm else []
+                r'<([a-zA-Z][a-zA-Z0-9]*)((?:[^>"]|"[^"]*")*)>', src):
+            tag, attrs = m.group(1), m.group(2)
+            sm = re.search(r'\sstyle="([^"]*)"', attrs)
+            if not sm:
+                continue
+            cm = re.search(r'\sclass="([^"]*)"', attrs)
+            classes = cm.group(1).split() if cm else []
             sel = tag + ('.' + '.'.join(classes) if classes else '')
-            page.rules.append(Rule(sel, style))
+            page.rules.append(Rule(sel, sm.group(1)))
         # Tailwind/utility classes (the style-block parser never sees them).
         for m in re.finditer(r'class="([^"]*)"', src):
             page.classes.extend(m.group(1).split())

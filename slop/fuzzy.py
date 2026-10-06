@@ -68,9 +68,14 @@ def is_neutral(hsl: tuple[float, float, float] | None) -> bool:
 
 
 def is_purple(hsl: tuple[float, float, float] | None) -> bool:
-    """Vibe purple: violet-to-indigo hue band with real saturation."""
+    """Vibe purple: violet-to-indigo hue band with real saturation.
+
+    Saturation floor is deliberately low (0.25): the muted violets
+    (#5a4a8a-family) are the same tell as the loud ones — damping the
+    chroma does not make a card border structural.
+    """
     return (hsl is not None and 235 <= hsl[0] <= 295
-            and hsl[1] >= 0.35 and 0.15 <= hsl[2] <= 0.85)
+            and hsl[1] >= 0.25 and 0.15 <= hsl[2] <= 0.85)
 
 
 def color_confidence(hsl: tuple[float, float, float],

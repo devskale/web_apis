@@ -7,11 +7,12 @@ GET  /rules                    → active detector ids + definitions version
 
 from __future__ import annotations
 
+import base64
 import logging
 
 import httpx
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import DEFINITIONS_VERSION
 from .detectors import run_all, score
@@ -24,7 +25,16 @@ FETCH_TIMEOUT_S = 20
 
 
 class LintBody(BaseModel):
-    html: str = Field(..., min_length=1, description="Full HTML document")
+    """Exactly one of `html` (raw) or `html_base64` must be provided.
+
+    extra='forbid' so a hand-rolled client sending {"html": "<base64>",
+    "base64": true} fails LOUDLY (422) instead of silently linting the
+    base64 string — which would always report Clean.
+    """
+
+    model_config = ConfigDict(extra='forbid')
+    html: str | None = Field(None, min_length=1)
+    html_base64: str | None = Field(None, min_length=1)
 
 
 class ScanBody(BaseModel):
@@ -66,10 +76,22 @@ def _lint(html: str) -> dict:
 @router.post('/lint')
 async def lint(body: LintBody) -> dict:
     """Lint a self-contained HTML document. Deterministic, no browser."""
-    if len(body.html.encode('utf-8', 'replace')) > MAX_HTML_BYTES:
+    if body.html is None and body.html_base64 is None:
+        raise HTTPException(422, 'provide exactly one of html | html_base64')
+    if body.html is not None and body.html_base64 is not None:
+        raise HTTPException(422, 'provide exactly one of html | html_base64')
+    if body.html_base64 is not None:
+        try:
+            html = base64.b64decode(body.html_base64, validate=True).decode(
+                'utf-8', 'replace')
+        except Exception:
+            raise HTTPException(400, 'html_base64 is not valid base64')
+    else:
+        html = body.html or ''
+    if len(html.encode('utf-8', 'replace')) > MAX_HTML_BYTES:
         raise HTTPException(413, 'HTML too large (max 2MB)')
     try:
-        return _lint(body.html)
+        return _lint(html)
     except Exception:
         logging.exception('slop/lint failed')
         raise HTTPException(500, 'Lint failed.')
