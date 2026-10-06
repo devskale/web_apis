@@ -283,5 +283,8 @@ def test_dgx_stack_fixture():
         'the inline 4px purple border-left on .card must be a hard finding')
     assert any('5a4a8a' in f.evidence for f in stripes), (
         f'expected the muted-violet stripe in evidence, got: {[s.evidence for s in stripes]}')
-    # the 8px legend dot must not fire purple_cta
-    assert not any(f.id == 'purple_cta' for f in fs)
+    # the .t-stt legend-tile fill is a real purple fill (bigger than a dot)
+    assert any(f.id == 'purple_cta' for f in fs), (
+        'the .t-stt purple background fill must fire purple_cta (hard)')
+    # the 8px legend dot itself must stay silent (size guard)
+    assert not any(f.id == 'purple_cta' and 'dot' in f.selector for f in fs)
