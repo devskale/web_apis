@@ -101,6 +101,7 @@ def _validate_url(url: str) -> None:
 # Import auth and routers
 from auth import verify_token
 from pdf.router import router as pdf_router
+from slop.router import router as slop_router
 from itoa.router import router as itoa_router
 
 # Setup logger with RotatingFileHandler
@@ -126,6 +127,7 @@ app = FastAPI(
 )
 
 app.include_router(pdf_router, prefix="/pdf", tags=["PDF"])
+app.include_router(slop_router, prefix="/slop", tags=["slop"], dependencies=[Depends(verify_token)])
 app.include_router(itoa_router, prefix="/itoa", tags=["itoa"], dependencies=[Depends(verify_token)])
 
 app.add_middleware(
