@@ -43,10 +43,16 @@ class PageModel:
         for rule in page.rules:
             for cm in re.finditer(r'(--[a-z0-9-]+)\s*:\s*([^;]+)', rule.decls):
                 page.custom_props.setdefault(cm.group(1), cm.group(2).strip())
-        # Inline style attributes become rules keyed by tag.
+        # Inline style attributes become rules keyed by tag+classes, so
+        # detectors can correlate a fill with the element's size context
+        # (a purple 8px dot is a category swatch, not a CTA).
         for m in re.finditer(
-                r'<([a-zA-Z][a-zA-Z0-9]*)[^>]*?\sstyle="([^"]*)"', src):
-            page.rules.append(Rule(m.group(1), m.group(2)))
+                r'<([a-zA-Z][a-zA-Z0-9]*)((?:[^>]\s)*)?\sstyle="([^"]*)"', src):
+            tag, attrs, style = m.group(1), m.group(2) or '', m.group(3)
+            cm = re.search(r'class="([^"]*)"', attrs)
+            classes = cm.group(1).replace('"', '').split() if cm else []
+            sel = tag + ('.' + '.'.join(classes) if classes else '')
+            page.rules.append(Rule(sel, style))
         # Tailwind/utility classes (the style-block parser never sees them).
         for m in re.finditer(r'class="([^"]*)"', src):
             page.classes.extend(m.group(1).split())
@@ -85,6 +91,32 @@ class PageModel:
             return None
         w = float(m.group(1)) * (16 if m.group(2) == 'rem' else 1)
         return (w, m.group(3).strip())
+
+    def rule_size(self, rule: Rule) -> float | None:
+        """Best-effort rendered size (max px) for a rule's element context.
+
+        Looks at the rule's own declarations, then at size declarations from
+        class rules referenced by its selector (inline styles carry the fill,
+        the class carries the geometry).
+        """
+        sizes = [float(x) * (16 if u == 'rem' else 1)
+                 for x, u in re.findall(
+                     r'(?:^|[;\s])(?:width|height)\s*:\s*([\d.]+)(px|rem)',
+                     rule.decls)]
+        if sizes:
+            return max(sizes)
+        for part in rule.selector.split('.'):  # look up class rules
+            if not part or part == rule.selector.split('.')[0]:
+                continue
+            for r in self.rules:
+                if re.search(r'\.' + re.escape(part) + r'(?![\w-])', r.selector):
+                    m = re.findall(
+                        r'(?:^|[;\s])(?:width|height)\s*:\s*([\d.]+)(px|rem)',
+                        r.decls)
+                    if m:
+                        return max(float(x) * (16 if u == 'rem' else 1)
+                                   for x, u in m)
+        return None
 
     def looks_like_card(self, selector: str) -> bool:
         """Heuristic: does this selector target a card/panel (vs a dot/label)?"""

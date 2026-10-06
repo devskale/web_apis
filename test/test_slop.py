@@ -10,7 +10,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from slop.detectors import run_all, score                     # noqa: E402
+from slop.detectors import (run_all, score, EdgeStripe, Pill, CircleBadge,
+                            PurpleCta, GradientText, Glass, Glow, SlopFonts,
+                            AllCaps, StatBanner, NumberedSteps)  # noqa: E402
 from slop.page_model import PageModel                          # noqa: E402
 
 
@@ -89,13 +91,13 @@ def test_purple_cta_finding():
     assert fs and fs[0].confidence >= 0.7
 
 
-def test_purple_single_is_review():
-    """One purple element could be brand color — REVIEW, not FINDING."""
+def test_purple_single_is_finding():
+    """Size-guard handles dots; a remaining purple fill is deliberate → hard."""
     html = """<style>
       .a { background: #6366f1; }
     </style>"""
     fs = [f for f in _lint(html) if f.id == 'purple_cta']
-    assert fs and fs[0].confidence < 0.7
+    assert fs and fs[0].confidence >= 0.7
 
 
 def test_purple_hsl_notation():
@@ -199,20 +201,51 @@ def test_clean_page_scores_low():
     assert s['score'] < 5
 
 
-# ── auditflow live page (the founding case) ──────────────────────────────────
+# ── auditflow golden fixture (the founding case) ─────────────────────────────
 
-def test_auditflow_page():
-    """The page that started this: 4px var() stripes the old linter missed."""
-    import urllib.request
-    try:
-        html = urllib.request.urlopen(
-            'https://skale.dev/throway/d/agentosreview/auditflow-overview.html',
-            timeout=15).read().decode('utf-8', 'replace')
-    except Exception:
-        import pytest
-        pytest.skip('auditflow page not reachable')
-    fs = _lint(html)
+def test_auditflow_fixture():
+    """The ORIGINAL sloppy page (saved as fixture after the in-place fix):
+    4px var() stripes the old border-left-only regex never saw."""
+    from pathlib import Path
+    fx = Path(__file__).parent / 'fixtures' / 'auditflow-sloppy.html'
+    fs = _lint(fx.read_text(encoding='utf-8'))
     stripes = [f for f in fs if f.id == 'edge_stripe']
     assert stripes, 'the border-top var() stripes must be found'
+    assert all(f.level == 'hard' for f in stripes)
     assert any(f.confidence >= 0.7 for f in stripes)
     assert 'numbered_steps' in _ids(fs)  # process vs decoration → review
+
+
+# ── severity: hard vs info ───────────────────────────────────────────────────
+
+def test_hard_levels_are_card_accents():
+    """hardslop = decorative color on containers; everything else is info."""
+    assert EdgeStripe.level == 'hard'
+    assert Pill.level == 'hard'
+    assert CircleBadge.level == 'hard'
+    assert PurpleCta.level == 'hard'
+    for det in (GradientText, Glass, Glow, SlopFonts, AllCaps, StatBanner,
+                NumberedSteps):
+        assert det.level == 'info', f'{det.id} must be info'
+
+
+def test_all_caps_is_info_not_gate():
+    """An all-caps wall must never fail a share on its own."""
+    css = '\n'.join(f'.k{i} {{ text-transform: uppercase; }}' for i in range(12))
+    fs = [f for f in _lint(f'<style>{css}</style>') if f.id == 'all_caps']
+    assert fs and fs[0].confidence >= 0.7
+    assert fs[0].level == 'info'
+
+
+def test_purple_dot_is_silent():
+    """Small category dots are structural color — purple or not, they pass."""
+    html = ('<style>.dot{width:8px;height:8px;border-radius:50%}</style>'
+            '<span class="dot" style="background:#9333ea"></span>')
+    assert 'purple_cta' not in _ids(_lint(html))
+
+
+def test_purple_button_still_finding():
+    html = ('<style>.btn{background:#6366f1;padding:10px 18px}</style>'
+            '<button class="btn">Start</button>')
+    fs = [f for f in _lint(html) if f.id == 'purple_cta']
+    assert fs and fs[0].confidence >= 0.7 and fs[0].level == 'hard'

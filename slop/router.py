@@ -34,10 +34,17 @@ class ScanBody(BaseModel):
 def _lint(html: str) -> dict:
     page = PageModel.parse(html)
     findings = run_all(page)
-    out_findings = [
+    out_findings = [                       # hard: card-accent family, gates
         {'id': f.id, 'weight': f.weight, 'confidence': round(f.confidence, 2),
          'evidence': f.evidence, 'selector': f.selector, 'fix': f.fix}
-        for f in findings if f.band() == 'finding'
+        for f in findings
+        if f.band() == 'finding' and f.level == 'hard'
+    ]
+    out_info = [                           # reported, never gates
+        {'id': f.id, 'confidence': round(f.confidence, 2),
+         'evidence': f.evidence, 'fix': f.fix}
+        for f in findings
+        if f.band() != 'silent' and f.level == 'info'
     ]
     review = [
         {'id': f.id, 'evidence': f.evidence, 'selector': f.selector,
@@ -50,6 +57,7 @@ def _lint(html: str) -> dict:
         'score': s['score'],
         'tier': s['tier'],
         'findings': out_findings,
+        'info': out_info,
         'review': review,
         'definitions_version': DEFINITIONS_VERSION,
     }

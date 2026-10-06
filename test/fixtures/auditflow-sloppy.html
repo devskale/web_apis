@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AuditFlow — Übersichtskarte</title>
+<style>
+  :root{
+    --paper:#fafaf9; --card:#ffffff; --ink:#1a1a1a; --muted:#6b7280;
+    --line:#e4e4e7; --soft:#f4f4f5;
+    --cat-a:#0f766e; --cat-a-bg:#eef7f5;      /* PA (Standard) */
+    --cat-b:#4f46e5; --cat-b-bg:#eef0fb;      /* FAP (Engine) */
+    --cat-c:#b45309; --cat-c-bg:#fdf5ea;      /* Routing / Einstieg */
+    --ok:#15803d; --warn:#b45309; --bad:#b91c1c;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:48px 24px 80px}
+
+  /* ---------- header ---------- */
+  header.hero{ margin-bottom:40px }
+  .kicker{ font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); font-weight:600 }
+  h1{ font-size:34px; line-height:1.15; margin:10px 0 6px; font-weight:700; letter-spacing:-.01em }
+  .sub{ font-size:16px; color:var(--muted); max-width:720px }
+  .meta-row{ display:flex; gap:18px; flex-wrap:wrap; margin-top:18px; font-size:13px; color:var(--muted) }
+  .meta-row span{ display:inline-flex; align-items:center; gap:6px }
+  .dot{ width:9px; height:9px; border-radius:50%; display:inline-block }
+
+  /* ---------- legend ---------- */
+  .legend{ display:flex; gap:20px; flex-wrap:wrap; padding:16px 18px; background:var(--card);
+           border:1px solid var(--line); border-radius:12px; margin-bottom:32px; font-size:13px }
+  .legend .lg{ display:inline-flex; align-items:center; gap:7px; color:var(--ink) }
+  .pill{ display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600 }
+  .pill.llm{ background:var(--soft); color:var(--ink); border:1px solid var(--line) }
+  .pill.det{ background:#e7f6ec; color:var(--ok); border:1px solid #c6e6d1 }
+
+  /* ---------- section frame ---------- */
+  .section{ margin-bottom:44px }
+  .section-head{ display:flex; align-items:baseline; gap:12px; margin-bottom:18px }
+  .section-head h2{ font-size:20px; margin:0; font-weight:700; letter-spacing:-.01em }
+  .section-head .tag{ font-size:12px; color:var(--muted); font-weight:500 }
+
+  /* ---------- entry / routing ---------- */
+  .entry{ display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:0 }
+  .node{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px }
+  .node .n-label{ font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:8px }
+  .node .n-title{ font-size:16px; font-weight:700; margin-bottom:4px }
+  .node .n-desc{ font-size:13.5px; color:var(--muted); line-height:1.5 }
+  .node.accent-a{ border-color:#c9e2dd; background:var(--cat-a-bg) }
+  .node.accent-b{ border-color:#d3d5f5; background:var(--cat-b-bg) }
+  .node.accent-c{ border-color:#ecd7b0; background:var(--cat-c-bg) }
+
+  .flow-v{ display:flex; justify-content:center; padding:10px 0; color:var(--muted) }
+  .flow-v .arr{ font-size:20px; line-height:1 }
+
+  /* ---------- routing weiche ---------- */
+  .weiche{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 20px;
+           display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:center }
+  .weiche .w-title{ font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--cat-c); margin-bottom:6px }
+  .weiche .w-name{ font-size:17px; font-weight:700; margin-bottom:4px }
+  .weiche .w-desc{ font-size:13.5px; color:var(--muted) }
+  .weiche .w-code{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px;
+                   background:var(--soft); border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin-top:10px; color:#334155 }
+  .fork{ display:flex; justify-content:center; gap:40px; padding:14px 0; color:var(--muted) }
+  .fork .branch{ display:flex; flex-direction:column; align-items:center; gap:4px; font-size:12px; font-weight:600 }
+  .fork .branch.a{ color:var(--cat-a) } .fork .branch.b{ color:var(--cat-b) }
+  .fork .branch .line{ width:2px; height:26px; background:currentColor; border-radius:2px }
+
+  /* ---------- path columns ---------- */
+  .paths{ display:grid; grid-template-columns:1fr 1fr; gap:24px }
+  .path{ background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; display:flex; flex-direction:column }
+  .path.pa{ border-top:4px solid var(--cat-a) }
+  .path.fap{ border-top:4px solid var(--cat-b) }
+  .path-head{ padding:20px 22px 14px }
+  .path-head .p-badge{ font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; padding:3px 9px; border-radius:6px; display:inline-block; margin-bottom:10px }
+  .path.pa .p-badge{ background:var(--cat-a-bg); color:var(--cat-a) }
+  .path.fap .p-badge{ background:var(--cat-b-bg); color:var(--cat-b) }
+  .path-head h3{ margin:0 0 4px; font-size:19px; font-weight:700 }
+  .path-head .p-sub{ font-size:13.5px; color:var(--muted) }
+  .path-body{ padding:0 22px 20px; display:flex; flex-direction:column; gap:0 }
+
+  .step{ padding:14px 0; border-top:1px solid var(--line) }
+  .step:first-child{ border-top:none }
+  .step .s-num{ font-size:11px; font-weight:700; color:var(--muted); letter-spacing:.06em; text-transform:uppercase }
+  .step .s-name{ font-size:15px; font-weight:700; margin:2px 0 3px }
+  .step .s-desc{ font-size:13px; color:var(--muted); line-height:1.5 }
+  .step .s-meta{ display:flex; gap:8px; flex-wrap:wrap; margin-top:8px }
+
+  .path-foot{ margin-top:auto; padding:14px 22px; background:var(--soft); border-top:1px solid var(--line);
+              font-size:12.5px; color:var(--muted) }
+  .path-foot strong{ color:var(--ink); font-weight:600 }
+
+  .chip{ font-size:11.5px; padding:2px 8px; border-radius:6px; background:var(--soft); border:1px solid var(--line); color:#334155; font-weight:500 }
+  .chip.llm{ background:#eef1f5; border-color:#dbe0e8 }
+  .chip.det{ background:#e7f6ec; border-color:#c6e6d1; color:var(--ok) }
+
+  /* ---------- output ---------- */
+  .output{ margin-top:24px; display:grid; grid-template-columns:1fr 1fr; gap:16px }
+  .out-node{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px 20px }
+  .out-node .o-label{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:6px }
+  .out-node .o-title{ font-size:15px; font-weight:700 }
+  .out-node .o-desc{ font-size:13px; color:var(--muted); margin-top:3px }
+
+  /* ---------- footer ---------- */
+  .foot{ margin-top:44px; padding-top:20px; border-top:1px solid var(--line); font-size:12.5px; color:var(--muted); line-height:1.7 }
+  .foot code{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; background:var(--soft); padding:1px 5px; border-radius:4px }
+
+  @media(max-width:860px){
+    .entry{grid-template-columns:1fr}
+    .weiche{grid-template-columns:1fr}
+    .paths{grid-template-columns:1fr}
+    .output{grid-template-columns:1fr}
+    h1{font-size:28px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">agentos · kontext.one</div>
+    <h1>AuditFlow — Übersichtskarte</h1>
+    <div class="sub">Automatisierte Kriterienbewertung für Vergabeverfahren. Ein Kriterium aus der Auditliste läuft durch die Routing-Weiche und wird über <strong>PA</strong> (Standard-Pfad) oder <strong>FAP</strong> (spezialisierte Engine) bewertet.</div>
+    <div class="meta-row">
+      <span><span class="dot" style="background:var(--cat-a)"></span>PA = Prüfanweisung</span>
+      <span><span class="dot" style="background:var(--cat-b)"></span>FAP = Fachliche Prüfanweisung</span>
+      <span class="pill llm">◆ LLM-Schritt</span>
+      <span class="pill det">● deterministisch</span>
+    </div>
+  </header>
+
+  <!-- ============ Einstieg + Routing ============ -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Einstieg</h2>
+      <span class="tag">Batch-Setup · einmal pro Lauf</span>
+    </div>
+    <div class="entry">
+      <div class="node">
+        <div class="n-label">Eingang</div>
+        <div class="n-title">Kriterium + OFS</div>
+        <div class="n-desc">Kriterium aus der Auditliste, OFS-Projektdaten, Ausschreibungsinfo. Healthcheck prüft die TU-API-Erreichbarkeit.</div>
+      </div>
+      <div class="node accent-c">
+        <div class="n-label">Prechecks <span class="chip det">deterministisch</span></div>
+        <div class="n-title">Meta vorbereiten</div>
+        <div class="n-desc">Nur im Batch: <code>biege</code>, <code>subunternehmer</code>, <code>land</code>, <code>preis</code> → atomar nach <code>audit.json → meta</code>.</div>
+      </div>
+      <div class="node accent-c">
+        <div class="n-label">Routing <span class="chip llm">LLM</span></div>
+        <div class="n-title">route_instruction()</div>
+        <div class="n-desc">FAP zuerst (Keyword + LLM), dann PA (semantisch). Ergebnis: <code>RoutingResult</code> mit <code>is_fap</code>.</div>
+      </div>
+    </div>
+
+    <div class="flow-v"><span class="arr">↓</span></div>
+
+    <div class="weiche">
+      <div>
+        <div class="w-title">Die Weiche</div>
+        <div class="w-name">route_instruction()</div>
+        <div class="w-desc">Ein Kriterium läuft durch die zentrale Routing-Weiche, die <strong>FAP zuerst</strong> prüft, dann PA. Das Ergebnis entscheidet den Ausführungspfad.</div>
+        <div class="w-code">RoutingResult(matched, is_fap, instruction_stub, pas_name, …)</div>
+      </div>
+      <div>
+        <div class="w-title">Priorität</div>
+        <div class="w-desc">
+          <strong>1.</strong> FAP-Match (Keyword-Prefilter + LLM) → <code>is_fap=True</code><br>
+          <strong>2.</strong> PA-Match (semantisches LLM) → <code>is_fap=False</code>, PAS-Body wird injiziert<br>
+          <strong>3.</strong> Kein Match → Standard-Default (generisches Assessment)
+        </div>
+      </div>
+    </div>
+
+    <div class="fork">
+      <div class="branch a"><span>PA-Pfad</span><span class="line"></span></div>
+      <div class="branch b"><span>FAP-Pfad</span><span class="line"></span></div>
+    </div>
+  </div>
+
+  <!-- ============ Zwei Pfade ============ -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Die zwei Ausführungspfade</h2>
+      <span class="tag">PA = Standard · FAP = Engine</span>
+    </div>
+
+    <div class="paths">
+
+      <!-- ===== PA Pfad ===== -->
+      <div class="path pa">
+        <div class="path-head">
+          <span class="p-badge">PA · Standard-Pfad</span>
+          <h3>Flat-Path — 3 Steps</h3>
+          <div class="p-sub">Generisches Assessment mit PAS-Body. Der „normale" Weg für die meisten Kriterien.</div>
+        </div>
+        <div class="path-body">
+          <div class="step">
+            <div class="s-num">Step 0</div>
+            <div class="s-name">entscheide-kontext <span class="chip llm">LLM</span></div>
+            <div class="s-desc">Kontext nötig? <code>false</code> → Skip Step 1 (kontext=[]). Context-Window-Fehler → safe <code>true</code>.</div>
+          </div>
+          <div class="step">
+            <div class="s-num">Step 1</div>
+            <div class="s-name">finde-doks <span class="chip llm">LLM</span></div>
+            <div class="s-desc">Dokumentensuche + Laden. Per-Doc-Token-Limit, Truncation-Marker, Context-Quality-Guard. PAS-<code>retrieval_docs</code> werden deterministisch nachgeladen.</div>
+          </div>
+          <div class="step">
+            <div class="s-num">Anreicherung</div>
+            <div class="s-name">deterministisch <span class="chip det">Python</span></div>
+            <div class="s-desc">Datumsprüfung, Signatur-Metadaten, Fakt-Extraktion (truncated docs), Sprach-Fakten aus Sidecars.</div>
+          </div>
+          <div class="step">
+            <div class="s-num">Step 2</div>
+            <div class="s-name">pruefe-kriterium <span class="chip llm">LLM</span></div>
+            <div class="s-desc">erfüllt? + Begründung. Python-Overrides nach dem LLM. Retry ×2 bei Context-Window.</div>
+          </div>
+        </div>
+        <div class="path-foot">
+          <strong>Ergebnis:</strong> <code>audit.json</code> — assessment + history (<code>pre.ki.*</code>)
+        </div>
+      </div>
+
+      <!-- ===== FAP Pfad ===== -->
+      <div class="path fap">
+        <div class="path-head">
+          <span class="p-badge">FAP · Engine</span>
+          <h3>4-Phase-Pipeline</h3>
+          <div class="p-sub">Config-driven Spezialprüfung. Zero-Python für neue Flows — nur <code>flow.config.json</code> + Prompts.</div>
+        </div>
+        <div class="path-body">
+          <div class="step">
+            <div class="s-num">Phase 1</div>
+            <div class="s-name">Gather <span class="chip llm">LLM</span><span class="chip det">det</span></div>
+            <div class="s-desc">Kontext sammeln: deterministische Punkte, AAB-Anforderungen, Firmenstruktur, Aktualität. Kein Urteil.</div>
+          </div>
+          <div class="step">
+            <div class="s-num">Phase 2</div>
+            <div class="s-name">Audit <span class="chip llm">LLM</span></div>
+            <div class="s-desc">Pro Arm Beweisdokumente holen + prüfen. Doc-Resolution, Cleaning, Within-Arm-State, Subsumption.</div>
+          </div>
+          <div class="step">
+            <div class="s-num">Phase 2.5</div>
+            <div class="s-name">Befund <span class="chip llm">LLM</span></div>
+            <div class="s-desc">Entity-State: welche Dokumente tragen das Ergebnis? Per-Doc-Tiers (referenziert / zusatzinfo / nicht_relevant).</div>
+          </div>
+          <div class="step">
+            <div class="s-num">Phase 3</div>
+            <div class="s-name">Synthesis <span class="chip llm">LLM</span></div>
+            <div class="s-desc">Arme + Befund aggregieren → begründetes Gesamturteil (erfüllt, confidence, begründung).</div>
+          </div>
+          <div class="step">
+            <div class="s-num">Phase 4</div>
+            <div class="s-name">Writeback <span class="chip det">Python</span></div>
+            <div class="s-desc">Atomarer, umlaut-sicherer Write nach <code>audit.json</code> + <code>faps.json</code>.</div>
+          </div>
+        </div>
+        <div class="path-foot">
+          <strong>Ergebnis:</strong> <code>audit.json</code> + <code>faps.json</code> (inkl. Befund-State)
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============ Output ============ -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Gemeinsamer Ausgang</h2>
+      <span class="tag">beide Pfade</span>
+    </div>
+    <div class="output">
+      <div class="out-node">
+        <div class="o-label">Persistenz</div>
+        <div class="o-title">audit.json</div>
+        <div class="o-desc">Kriterium + assessment + history + doc_names. Status-Filter: entfernt / auditiert → skip (ohne <code>--force</code>).</div>
+      </div>
+      <div class="out-node">
+        <div class="o-label">Checkpoints &amp; Replay</div>
+        <div class="o-title">post_gather · post_assess · post_befund</div>
+        <div class="o-desc">Opt-in (<code>AUDITFLOW_CHECKPOINTS=1</code>). <code>--replay-from</code> für Prompt-Tuning ohne Full-Run.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Footer ============ -->
+  <div class="foot">
+    <strong>Quellen:</strong>
+    <code>python-utils/packages/agentos/auditFlow.py</code> (Thin-Shim) ·
+    <code>agentos/auditflow/runner.py</code> (Orchestrator, ADR 0001 Seam) ·
+    <code>agentos/auditflow/routing.py</code> (route_instruction) ·
+    <code>agentos/auditflow/steps.py</code> (4 Steps) ·
+    <code>agentos/fap_flows/engine/</code> (4-Phase-Pipeline) ·
+    <code>agentos/fap_flows/registry.py</code> (RUNNER_REGISTRY) ·
+    Doku: <code>docs/auditflow.md</code> · <code>docs/fap-flows.md</code>
+    <br><br>
+    Hinweis: Jeder LLM-Schritt (route, needsContext, retrieve, assess, dateExtract, facts) ruft <code>uniinfer</code> auf. Diese Karte zeigt die Struktur, nicht jeden einzelnen Modellaufruf.
+  </div>
+
+</div>
+</body>
+</html>

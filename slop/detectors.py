@@ -29,6 +29,7 @@ class Finding:
     evidence: str
     selector: str
     fix: str
+    level: str = 'info'   # 'hard' = card-accent family (gates the share)
 
     def band(self) -> str:
         from . import FIND, REVIEW
@@ -42,6 +43,9 @@ class Finding:
 class Detector:
     id: str = ''
     weight: int = 4
+    # 'hard': decorative color on containers (stripes, capsules, fills) —
+    # gates the share. 'info': reported, never gates.
+    level: str = 'info'
 
     def detect(self, page: PageModel) -> list[Finding]:
         raise NotImplementedError
@@ -58,6 +62,7 @@ class EdgeStripe(Detector):
     """
     id = 'edge_stripe'
     weight = 6
+    level = 'hard'
 
     def detect(self, page):
         out = []
@@ -89,7 +94,8 @@ class EdgeStripe(Detector):
                     self.id, self.weight, conf,
                     f'border-{side}:{w:g}px solid {resolved} on "{rule.selector[:40]}"',
                     rule.selector[:60],
-                    'put the hue on content (label/dot/value), not on the card edge'))
+                    'put the hue on content (label/dot/value), not on the card edge',
+                    self.level))
         return out
 
 
@@ -97,6 +103,7 @@ class Pill(Detector):
     """Pastel pill capsule: border-radius 999px + colored background."""
     id = 'pill'
     weight = 5
+    level = 'hard'
 
     def detect(self, page):
         out = []
@@ -114,7 +121,8 @@ class Pill(Detector):
                 self.id, self.weight, color_confidence(hsl, False),
                 f'pill capsule (border-radius:999px + {resolved}) on "{rule.selector[:40]}"',
                 rule.selector[:60],
-                'use a small square dot + severity text instead of a tinted capsule'))
+                'use a small square dot + severity text instead of a tinted capsule',
+                self.level))
         return out
 
 
@@ -122,6 +130,7 @@ class CircleBadge(Detector):
     """Large colored circle badge (>=20px); small category dots pass."""
     id = 'circle_badge'
     weight = 4
+    level = 'hard'
 
     def detect(self, page):
         out = []
@@ -143,7 +152,8 @@ class CircleBadge(Detector):
                     self.id, self.weight, 0.8,
                     f'circle badge ({max(sizes):g}px, {resolved}) on "{rule.selector[:40]}"',
                     rule.selector[:60],
-                    'use a square swatch or text label instead of a big colored circle'))
+                    'use a square swatch or text label instead of a big colored circle',
+                    self.level))
         return out
 
 
@@ -151,10 +161,10 @@ class PurpleCta(Detector):
     """Vibe purple: filled indigo/violet backgrounds (CTAs, hero chips)."""
     id = 'purple_cta'
     weight = 8
+    level = 'hard'
 
     def detect(self, page):
         out = []
-        seen = 0
         for rule in page.rules:
             m = re.search(r'background(?:-color)?\s*:\s*([^;]+)', rule.decls)
             if not m:
@@ -163,15 +173,17 @@ class PurpleCta(Detector):
             hsl = parse_color(resolved)
             if hsl is None or not is_purple(hsl):
                 continue
-            seen += 1
+            # Small filled elements are category dots/swatches — structural
+            # color per house style, not CTAs. Stay silent on them.
+            size = page.rule_size(rule)
+            if size is not None and size <= 14:
+                continue
             out.append(Finding(
                 self.id, self.weight, 0.85,
                 f'vibe purple fill ({resolved}) on "{rule.selector[:40]}"',
                 rule.selector[:60],
-                'violet/indigo fills read as AI default — use a neutral fill or put hue on text'))
-        # A single purple element is borderline (could be brand); scale down.
-        if seen == 1 and out:
-            out[0].confidence = 0.5
+                'violet/indigo fills read as AI default — use a neutral fill or put hue on text',
+                self.level))
         return out
 
 
@@ -350,7 +362,8 @@ def run_all(page: PageModel) -> list[Finding]:
                 'pill', 5, 0.75,
                 f'Tailwind pill classes (rounded-full + {m.group(0)})',
                 'class',
-                'use a small square dot + severity text instead of a tinted capsule'))
+                'use a small square dot + severity text instead of a tinted capsule',
+                'hard'))
     return findings
 
 
