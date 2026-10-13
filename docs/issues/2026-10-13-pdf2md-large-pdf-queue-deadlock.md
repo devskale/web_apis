@@ -1,6 +1,7 @@
 # Issue: `pdf2md` scheitert an großen Text-PDFs — mp.Queue-Deadlock im pdfplumber-Child (504 nach exakt 60s)
 
-**Status:** offen (Diagnose abgeschlossen, Fix-Vorschlag steht)
+**Status:** ✅ behoben (2026-10-13, web_apis `99a7e05`+`839a08d` + pdf2md 1.4.5) —
+drei Ursachen gefunden und gefixt, live validiert an der Vorfall-Datei
 **Schwere:** hoch für den Use-Case — JEDES Text-PDF mit >~45 Seiten (Ergebnis >64KB) scheitert deterministisch
 **Aufgetreten:** 2026-10-13, `pdf2md ~/Documents/tu-forschung/thesis.pdf` (149 Seiten, 3,1MB, Text-PDF)
 **Reporter:** Session-Diagnose
@@ -119,7 +120,37 @@ Wie llamaparse: 202 + Poll. Erst nötig, wenn Dokumente >60s CPU brauchen
    llamaparse als Scan-Fallback). NICHT in diesen Fix mischen: dieser hier ist
    ein 3-Zeilen-Deadlock-Fix mit sicherer Diagnose.
 
-## 6. Workaround (bis zum Fix)
+## 7. Lösung (2026-10-13, live validiert)
+
+Diagnose war DREIschichtig — der Deadlock war nur Ursache 1:
+
+| # | Ursache | Fix | Commit |
+|---|---|---|---|
+| 1 | mp.Queue-Deadlock: join vor Drain, Ergebnisse >64KB hängen den Feeder auf | Queue mit 1s-Ticks drainen VOR join (crashed Child → schnelles 500, Hänger → 504) | `99a7e05` |
+| 2 | `RLIMIT_AS=1GB` bremst pdfminer 3,4× (106,6s vs 31,6s für 60 Seiten, identischer Child) — malloc kämpft am Cap | 2GB: pdfminer berührt es nie, Bomben-Backstop bleibt | `839a08d` |
+| 3 | amd konvertiert ~0.5-0.8s/page (15× langsamer als lokal): >~60 Seiten reißen den 60s-Watchdog, der unter gunicorn-120s bleiben muss | pdfplumber >30 Seiten als async Job (202+Poll, CPU-Slot, Child-Budget = Rest-Deadline) — analog llamaparse | `839a08d` |
+
+Zusätzlich: llamaparse-Job-Worker bekam das harte 100s-Poll-Budget der Sync-
+Bahn (große Scans scheiterten AUCH async) → `poll_budget_s`-Parameter.
+Client (pdf2md 1.4.5): 504-Meldung pro Methode, Poll-Budget bei 202 mind. 600s.
+
+**Live-Validierung (amd, 2026-10-13 17:0x):**
+
+| Fall | Vorher | Nachher |
+|---|---|---|
+| 1 Seite, sync | ✓ | ✓ 2,6s |
+| 60 Seiten, 180KB Ergebnis | 504 @ 60s | 202→Job→done in 39s, 180.709 chars |
+| **Thesis, 149 Seiten** (die Vorfall-Datei) | 504 @ 60s | **202→Job→done in 1m48s, 347.564 chars** |
+
+Offen als Folge-Themen (nicht Teil dieses Fixes):
+- **LlamaParse-Webhooks** existieren (`webhook_configurations` pro Job:
+  `parse.success`/`error`, Custom Headers, HMAC-Signing, Retry+Backoff;
+  zusätzlich speicherbare Configs per ID). Für unseren Ein-Job-CLI-Flow bringt
+  ein Callback-Endpoint auf amd keinen Vorteil (Client pollt eh, der Worker
+  pollt eh, Latenzgewinn ≤3s) — interessant erst bei Batch-Verarbeitung.
+- **doc2md** (Office-Docs + Images): eigenes Issue/Skill.
+
+## 8. Workaround (historisch, vor dem Fix)
 
 Ergebnis unter 64KB halten: Seitenbereiche konvertieren (z.B. qpdf/mlp splitten)
 oder `--method llamaparse` (läuft über das Job-System, uploadet das Dokument aber
