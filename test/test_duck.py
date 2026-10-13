@@ -157,3 +157,51 @@ def test_searxng_primary_and_ddg_fallback():
             {"href": "https://ddg", "body": "b"}]
         results = duck_search_mod.search("anything", 5, "at")
     assert results == [{"url": "https://ddg", "description": "b"}]
+
+
+# ── cache .tmp hygiene (lesson from pdf, 2026-10-13) ──────────────────
+def test_cache_evicts_stale_tmp_ghosts(tmp_path, monkeypatch):
+    """Abgestürzte cache_put-Schreibungen hinterlassen .tmp-Geister: sie
+    dürfen NICHT als Einträge zählen (Cap-Schrumpf) und MÜSSEN ab 60s
+    geräumt werden. Frische .tmp (in-flight write) bleiben unangetastet."""
+    import time as _t
+    import duck.cache as C
+
+    monkeypatch.setattr(C, "_CACHE_DIR", str(tmp_path))
+    for i in range(3):
+        (tmp_path / f"entry{i:02d}").write_text("{}")
+    ghost = tmp_path / "ghost.tmp"
+    ghost.write_text("{}")
+    _t.sleep(0.01)
+    fresh = tmp_path / "fresh.tmp"
+    fresh.write_text("{}")
+    # Ghost alt machen (mtime in die Vergangenheit)
+    old = _t.time() - 120
+    import os as _os
+    _os.utime(ghost, (old, old))
+
+    C._evict_if_needed()
+
+    assert not ghost.exists(), "stale .tmp ghost must be unlinked"
+    assert fresh.exists(), "fresh .tmp (in-flight write) must survive"
+    assert sum(1 for p in tmp_path.iterdir()
+               if not p.name.endswith(".tmp")) == 3, "entries untouched"
+
+
+def test_cache_tmp_never_counts_toward_cap(tmp_path, monkeypatch):
+    """.tmp-Dateien zählen nicht gegen _MAX_ENTRIES — sonst verkleinern
+    Geister still die echte Cache-Kapazität."""
+    import time as _t
+    import duck.cache as C
+
+    monkeypatch.setattr(C, "_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(C, "_MAX_ENTRIES", 2)
+    for i in range(2):
+        (tmp_path / f"e{i}").write_text("{}")
+    (tmp_path / "inflight.tmp").write_text("{}")
+    _t.sleep(0.01)
+
+    C._evict_if_needed()
+
+    left = [p.name for p in tmp_path.iterdir() if not p.name.endswith(".tmp")]
+    assert len(left) == 2, "entries must not be evicted because of a .tmp"

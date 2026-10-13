@@ -64,13 +64,35 @@ def cache_put(final_query: str, timelimit, rows, **params) -> None:
 
 
 def _evict_if_needed() -> None:
+    """LRU eviction — with .tmp hygiene (lesson from pdf, 2026-10-13):
+
+    A crashed cache_put leaves a .tmp ghost behind. Counted as an entry it
+    silently shrinks the real capacity; as the oldest mtime it eventually
+    gets evicted, but until then it displaces live results. Stale ghosts
+    (>60s — a live write never takes that long) are unlinked on sight;
+    fresh .tmp files are neither counted nor evicted (an in-flight write
+    must never be reaped mid-os.replace).
+    """
+    now = time.time()
     try:
-        entries = [
-            (os.path.getmtime(os.path.join(_CACHE_DIR, f)), f)
-            for f in os.listdir(_CACHE_DIR)
-        ]
+        names = os.listdir(_CACHE_DIR)
     except OSError:
         return
+    entries = []
+    for f in names:
+        path = os.path.join(_CACHE_DIR, f)
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        if f.endswith(".tmp"):
+            if now - mtime > 60:  # ghost from a crashed write
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            continue  # never counted, never LRU-evicted mid-write
+        entries.append((mtime, f))
     for _, oldest in sorted(entries)[:max(0, len(entries) - _MAX_ENTRIES)]:
         try:
             os.unlink(os.path.join(_CACHE_DIR, oldest))

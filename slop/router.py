@@ -12,6 +12,7 @@ import logging
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import DEFINITIONS_VERSION
@@ -74,7 +75,11 @@ def _lint(html: str) -> dict:
 
 
 @router.post('/lint')
-async def lint(body: LintBody) -> dict:
+def lint(body: LintBody) -> dict:
+    """Sync on purpose: parsing + fuzzy regex on up to 2MB HTML is CPU-bound —
+    an async def would run it ON the event loop and stall every concurrent
+    request (incl. SSE job streams) for the whole lint (pdf/router.py made
+    the same call). FastAPI runs sync endpoints in the threadpool."""
     """Lint a self-contained HTML document. Deterministic, no browser."""
     if body.html is None and body.html_base64 is None:
         raise HTTPException(422, 'provide exactly one of html | html_base64')
@@ -99,6 +104,9 @@ async def lint(body: LintBody) -> dict:
 
 @router.post('/scan')
 async def scan(body: ScanBody) -> dict:
+    """async für den URL-Fetch (I/O); die CPU-Lint läuft danach über
+    run_in_threadpool — NIE auf dem Event-Loop, sonst stallt ein großer
+    Scan jede Concurrent-Request (gleiche Begründung wie /lint sync)."""
     """Fetch a URL server-side and lint it."""
     try:
         async with httpx.AsyncClient(
@@ -109,7 +117,7 @@ async def scan(body: ScanBody) -> dict:
         raise HTTPException(502, f'Fetch failed: {e.__class__.__name__}')
     if len(resp.content) > MAX_HTML_BYTES:
         raise HTTPException(413, 'Page too large (max 2MB)')
-    result = _lint(resp.text)
+    result = await run_in_threadpool(_lint, resp.text)
     result['url'] = str(resp.url)
     result['title'] = _title(resp.text)
     return result

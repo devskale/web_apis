@@ -37,8 +37,13 @@ class AsciiMode(str, Enum):
     Japanese = "Japanese"
 
 
+# Upload cap (amd is a ~1GB box): reject before buffering, same rule as
+# pdf/to_md. Images don't need more; a lying client gets a clean 413.
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
 @router.post("/convert")
-async def convert_image_to_ascii(
+def convert_image_to_ascii(
     file: UploadFile = File(...),
     width: int = Form(
         100, ge=1, le=500,
@@ -57,8 +62,14 @@ async def convert_image_to_ascii(
         raise HTTPException(
             status_code=400, detail="File provided is not an image.")
 
+    if file.size is not None and file.size > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image too large (max 8MB)")
+
     try:
-        contents = await file.read()
+        contents = file.file.read()
+        if len(contents) > MAX_IMAGE_BYTES:
+            # client lied about size — re-check after the read (pdf pattern)
+            raise HTTPException(status_code=413, detail="Image too large (max 8MB)")
         image_stream = io.BytesIO(contents)
         ascii_art = image_to_ascii(
             image_stream, width=width, color=color, mode=mode.value)
