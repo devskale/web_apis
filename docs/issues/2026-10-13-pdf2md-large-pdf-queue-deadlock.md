@@ -143,11 +143,14 @@ Client (pdf2md 1.4.5): 504-Meldung pro Methode, Poll-Budget bei 202 mind. 600s.
 | **Thesis, 149 Seiten** (die Vorfall-Datei) | 504 @ 60s | **202→Job→done in 1m48s, 347.564 chars** |
 
 Offen als Folge-Themen (nicht Teil dieses Fixes):
-- **LlamaParse-Webhooks** existieren (`webhook_configurations` pro Job:
-  `parse.success`/`error`, Custom Headers, HMAC-Signing, Retry+Backoff;
-  zusätzlich speicherbare Configs per ID). Für unseren Ein-Job-CLI-Flow bringt
-  ein Callback-Endpoint auf amd keinen Vorteil (Client pollt eh, der Worker
-  pollt eh, Latenzgewinn ≤3s) — interessant erst bei Batch-Verarbeitung.
+- **SSE ist GEBAUT** (2026-10-13, `d4d0f32` + pdf2md 1.5.0): `GET
+  /pdf/jobs/{id}/events` — Statuswechsel-Push mit TTL in jedem Event,
+  Client SSE-first mit Polling-Fallback. Entschieden gegen Webhooks für den
+  Ein-Job-Flow (CLI ist ephemeral, Client-Polling bleibt ohnehin, Latenz-
+  gewinn wäre nur server-seitig ≤3s). LlamaParse-Webhooks (`webhook_
+  configurations`: parse.success/error, Custom Headers, HMAC-Signing,
+  Retry+Backoff, saved Configs per ID) bleiben die Option für BATCH-
+  Verarbeitung — dort ersetzen sie N× Polling wirklich.
 - **doc2md** (Office-Docs + Images): eigenes Issue/Skill.
 
 ## 8. Workaround (historisch, vor dem Fix)
