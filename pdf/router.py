@@ -1,3 +1,4 @@
+import asyncio
 import gc
 import io
 import json
@@ -16,7 +17,7 @@ import fitz
 import httpx
 import requests
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from auth import verify_token
 from typing import Literal
 
@@ -336,6 +337,12 @@ def _run_pdfplumber_child(data: bytes, timeout_s: float) -> str:
     if proc.is_alive():  # belt-and-braces: never leak a stray child
         proc.kill()
         proc.join()
+    # Queue hygiene: an unclosed mp.Queue leaves a feeder thread + pipe FD
+    # behind; at interpreter exit the resource_tracker stalls on them (seen
+    # as a hang AFTER the test suite passes). close() + join_thread() is the
+    # documented shutdown for queues we are done reading.
+    out_q.close()
+    out_q.join_thread()
     gc.collect()
     if status == "error":
         logging.error("pdf/to_md failed (pdfplumber): %s", payload)
@@ -755,6 +762,89 @@ def pdf_to_md(
     }
 
 
+def _job_snapshot(job: dict) -> dict:
+    """Public view of a job dict — the single source for BOTH the poll
+    endpoint and the SSE stream, so they can never drift apart.
+
+    Every snapshot carries expires_in (TTL seconds): how long the result
+    stays retrievable — job files live JOB_TTL_S (2h); throway-transferred
+    results live as long as the throway link (THROWAY_TTL_S, 4h)."""
+    out = {k: job.get(k) for k in
+           ("job_id", "status", "created_at", "pages", "chars")}
+    out["expires_in"] = max(
+        0, int(JOB_TTL_S - (time.time() - job.get("created_ts", 0))))
+    if job.get("status") == "failed":
+        out["error"] = job.get("error", "")
+    if job.get("status") == "done":
+        if job.get("markdown_url"):
+            out["markdown_url"] = job["markdown_url"]
+            out["expires_in"] = THROWAY_TTL_S
+        else:
+            out["markdown"] = job.get("markdown", "")
+    return out
+
+
+@router.get("/jobs/{job_id}/events", tags=["PDF"],
+            summary="Server-Sent Events stream for a conversion job",
+            description=(
+                "Push stream of job status transitions. One event per status "
+                "CHANGE (queued -> running -> done/failed), each carrying the "
+                "same snapshot as GET /pdf/jobs/{id} incl. expires_in (TTL). "
+                "A `: ping` comment every 15s keeps proxies from closing the "
+                "stream; the stream ends on the terminal event. For a job "
+                "that is already terminal, the event is emitted immediately "
+                "and the stream closes — no waiting."),
+            responses={
+                200: {"description": "text/event-stream of status events"},
+                404: {"description": "Unknown or expired job (jobs live ~2h)"},
+            })
+async def pdf_job_events(job_id: str, token: str = Depends(verify_token)):
+    job = _load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Unknown or expired job")
+
+    def sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    async def stream():
+        last = None
+        # Hard caps: never stream longer than the job's own TTL — past it,
+        # the file is purged and the result is gone (nothing left to wait for).
+        stream_deadline = min(
+            time.time() + JOB_TTL_S,
+            job.get("created_ts", time.time()) + JOB_TTL_S + 30)
+        last_beat = time.monotonic()
+        while True:
+            current = _load_job(job_id)
+            if current is None:  # purged mid-stream (TTL eviction race)
+                yield sse("status", {"status": "failed",
+                                     "error": "job expired (TTL)",
+                                     "expires_in": 0})
+                return
+            if current.get("status") in ("queued", "running"):
+                _kill_overdue(current)  # same self-healing as the poll path
+            status = current.get("status")
+            if status != last:
+                yield sse("status", _job_snapshot(current))
+                last = status
+                if status in ("done", "failed"):
+                    return
+            now = time.monotonic()
+            if now - last_beat >= 15.0:  # proxy keep-alive comment
+                yield ": ping\n\n"
+                last_beat = now
+            if now > stream_deadline:
+                yield sse("status", {"status": "failed",
+                                     "error": "stream exceeded job TTL",
+                                     "expires_in": 0})
+                return
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(
+        stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @router.get("/jobs/{job_id}", tags=["PDF"],
             summary="Status/result of an async pdf conversion job",
             responses={
@@ -768,18 +858,6 @@ def pdf_job_status(job_id: str, token: str = Depends(verify_token)):
     job = _load_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Unknown or expired job")
-    out = {k: job.get(k) for k in
-           ("job_id", "status", "created_at", "pages", "chars")}
-    out["expires_in"] = max(0, int(JOB_TTL_S - (time.time() - job["created_ts"])))
-    if job["status"] == "failed":
-        out["error"] = job.get("error", "")
-    elif job["status"] in ("queued", "running") and _kill_overdue(job):
-        out["status"] = "failed"
-        out["error"] = job.get("error", "")
-    if job["status"] == "done":
-        if job.get("markdown_url"):
-            out["markdown_url"] = job["markdown_url"]
-            out["expires_in"] = THROWAY_TTL_S
-        else:
-            out["markdown"] = job.get("markdown", "")
-    return out
+    if job["status"] in ("queued", "running"):
+        _kill_overdue(job)
+    return _job_snapshot(job)
