@@ -85,6 +85,11 @@ except ValueError:
 JOBS_DIR = os.path.join(os.path.dirname(__file__), "data", "pdf_jobs")
 os.makedirs(JOBS_DIR, exist_ok=True)
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+# Boot marker for the orphan sweep: worker threads do not survive a restart,
+# so any queued/running job older than this process is definitionally
+# abandoned (SOTA visibility-timeout equivalent for a file-based queue —
+# reclaimed on the first read after boot instead of waiting out the deadline).
+_PROCESS_START = time.time()
 
 _llama_slots = threading.BoundedSemaphore(LLAMA_JOB_SLOTS)
 _local_slots = threading.BoundedSemaphore(LOCAL_JOB_SLOTS)
@@ -102,9 +107,16 @@ def _job_path(job_id: str) -> str:
 
 def _save_job(job: dict) -> None:
     tmp = job["_path"] + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump({k: v for k, v in job.items() if not k.startswith("_")}, fh)
-    os.replace(tmp, job["_path"])
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({k: v for k, v in job.items() if not k.startswith("_")}, fh)
+        os.replace(tmp, job["_path"])
+    except FileNotFoundError:
+        # race vs _purge_jobs unlinking fresh .tmp files: rewrite once —
+        # the job state itself is intact, only the temp file was reaped
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({k: v for k, v in job.items() if not k.startswith("_")}, fh)
+        os.replace(tmp, job["_path"])
 
 
 def _load_job(job_id: str):
@@ -119,17 +131,47 @@ def _load_job(job_id: str):
 
 def _purge_jobs() -> None:
     """Unlink expired job files and orphaned .tmp leftovers (opportunistic;
-    atomic writes make this safe across the two workers)."""
+    atomic writes make this safe across the two workers).
+
+    Also the orphan sweep: queued/running jobs created before this process
+    started can never finish (their worker threads died with the previous
+    boot) — flip them to failed immediately instead of letting the client
+    stare at 'running' for the rest of the 20-min deadline."""
     now = time.time()
     try:
         for name in os.listdir(JOBS_DIR):
             p = os.path.join(JOBS_DIR, name)
             try:
-                if name.endswith(".tmp") or now - os.path.getmtime(p) > JOB_TTL_S:
+                if name.endswith(".json"):
+                    _sweep_orphan(p, now)
+                # .tmp: only reap STALE ones (>60s). A fresh .tmp is an
+                # in-flight _save_job — unlinking it made os.replace fail and
+                # silently killed the worker thread (race found by the new
+                # catch-all, 2026-10-13).
+                if ((name.endswith(".tmp") and now - os.path.getmtime(p) > 60)
+                        or now - os.path.getmtime(p) > JOB_TTL_S):
                     os.unlink(p)
             except OSError:
                 pass
     except OSError:
+        pass
+
+
+def _sweep_orphan(path: str, now: float) -> None:
+    """Flip pre-boot queued/running jobs to failed (see _purge_jobs)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            job = json.load(fh)
+        if (job.get("status") in ("queued", "running")
+                and job.get("created_ts", now) < _PROCESS_START):
+            job["status"] = "failed"
+            job["error"] = "service restarted before the job finished (orphaned)"
+            job["_path"] = path
+            _save_job(job)
+            logging.warning("pdf jobs: orphaned %s flipped to failed "
+                            "(pre-boot, was %s)", os.path.basename(path),
+                            job.get("method", "?"))
+    except (OSError, ValueError):
         pass
 
 
@@ -149,10 +191,33 @@ def _kill_overdue(job: dict) -> bool:
 
 
 def _count_jobs() -> int:
+    """ACTIVE jobs only (queued+running) — the queue cap protects CPU/RAM
+    slots, not disk. A done result waiting for pickup (or TTL eviction)
+    must never block new submissions for its whole TTL (issue: clients that
+    never collect would lock the queue for 2h). Unreadable files count as
+    active (conservative)."""
+    n = 0
     try:
-        return len([n for n in os.listdir(JOBS_DIR) if n.endswith(".json")])
+        for name in os.listdir(JOBS_DIR):
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(JOBS_DIR, name), encoding="utf-8") as fh:
+                    if json.load(fh).get("status") in ("queued", "running"):
+                        n += 1
+            except (OSError, ValueError):
+                n += 1
+        return n
     except OSError:
         return 0
+
+
+def _job_cancelled(job_id: str) -> bool:
+    """Fresh check whether a job was cancelled by the client (DELETE).
+    Workers poll this before starting and after finishing their conversion —
+    a cancelled job's result is discarded, never saved as done."""
+    job = _load_job(job_id)
+    return bool(job and job.get("status") == "cancelled")
 
 
 def _throway_upload(markdown: str, name: str) -> str:
@@ -215,6 +280,9 @@ def _run_llama_job(job_id: str, pdf_path: str, filename: str, tier: str,
             job["error"] = "auto-killed: deadline exceeded before conversion"
             _save_job(job)
             return
+        # cancelled while queued? the client DELETEd us — discard, don't run
+        if _job_cancelled(job_id):
+            return
         job["status"] = "running"
         _save_job(job)
         try:
@@ -225,24 +293,48 @@ def _run_llama_job(job_id: str, pdf_path: str, filename: str, tier: str,
             job["error"] = f"OSError: {e}"
             _save_job(job)
             return
-        try:
-            markdown = _llamaparse_to_markdown(
-                data, filename, tier, language,
-                poll_budget_s=max(
-                    LLAMA_POLL_TIMEOUT_S,
-                    min(job["deadline_ts"] - time.time(), JOB_DEADLINE_S)
-                    - 30.0))  # 30s margin: upload + result fetch + transfer
-        except Exception as e:
-            job["status"] = "failed"
-            job["error"] = f"{type(e).__name__}: {e}"
-            _save_job(job)
-            return
+        # bounded retry for RETRYABLE upstream failures (LlamaParse hiccups:
+        # 502/504). Permanent errors (quota 429, key 503, bad input) fail
+        # fast — SOTA: retries are a designed policy, not a ladder you climb
+        # into the same wall five times.
+        markdown = None
+        for attempt in range(2):
+            try:
+                markdown = _llamaparse_to_markdown(
+                    data, filename, tier, language,
+                    poll_budget_s=max(
+                        LLAMA_POLL_TIMEOUT_S,
+                        min(job["deadline_ts"] - time.time(), JOB_DEADLINE_S)
+                        - 30.0))  # 30s margin: upload + result fetch + transfer
+                break
+            except Exception as e:
+                # permanent = the API told us it will not work (quota 429,
+                # key 503, bad input); everything else (502/504, network
+                # resets) is worth exactly one retry with backoff
+                permanent = (isinstance(e, HTTPException)
+                             and e.status_code not in (502, 504))
+                if permanent or attempt == 1 or _deadline_hit(job):
+                    detail = (f"HTTP {e.status_code}: {e.detail}"
+                              if isinstance(e, HTTPException)
+                              else f"{type(e).__name__}: {e}")
+                    job["status"] = "failed"
+                    job["error"] = f"llamaparse: {detail}"
+                    _save_job(job)
+                    return
+                logging.warning("pdf job %s: llamaparse retryable failure "
+                                "(%s), retrying once", job_id,
+                                type(e).__name__)
+                time.sleep(10)  # backoff: immediate retries self-DDoS upstream
         del data
         gc.collect()
         if _deadline_hit(job):
             job["status"] = "failed"
             job["error"] = "auto-killed: deadline exceeded after conversion"
             _save_job(job)
+            return
+        # cancelled mid-conversion? discard the result, keep the cancelled
+        # status the DELETE wrote — never overwrite it with done
+        if _job_cancelled(job_id):
             return
         job["chars"] = len(markdown)
         if transfer == "throway":
@@ -257,6 +349,17 @@ def _run_llama_job(job_id: str, pdf_path: str, filename: str, tier: str,
         job["status"] = "done"
         _save_job(job)
         del markdown
+    except Exception as e:
+        # worker crash = first-class failure event (SOTA DLQ rule): flip the
+        # job NOW with the exception — never leave it 'running' until the
+        # 20-min deadline flips it for us.
+        logging.exception("pdf job %s: worker crashed", job_id)
+        job["status"] = "failed"
+        job["error"] = f"worker crashed: {type(e).__name__}: {e}"
+        try:
+            _save_job(job)
+        except Exception:
+            pass  # best effort — the reader-side sweep is the backstop
     finally:
         _llama_slots.release()
         _cleanup_pdf(pdf_path)
@@ -421,6 +524,9 @@ def _run_local_job(job_id: str, pdf_path: str, filename: str,
             job["error"] = "auto-killed: deadline exceeded before conversion"
             _save_job(job)
             return
+        # cancelled while queued? discard, don't burn CPU on it
+        if _job_cancelled(job_id):
+            return
         job["status"] = "running"
         _save_job(job)
         try:
@@ -450,6 +556,9 @@ def _run_local_job(job_id: str, pdf_path: str, filename: str,
             job["error"] = "auto-killed: deadline exceeded after conversion"
             _save_job(job)
             return
+        # cancelled mid-conversion? discard the result, keep cancelled
+        if _job_cancelled(job_id):
+            return
         job["chars"] = len(markdown)
         if transfer == "throway":
             try:
@@ -463,6 +572,16 @@ def _run_local_job(job_id: str, pdf_path: str, filename: str,
         job["status"] = "done"
         _save_job(job)
         del markdown
+    except Exception as e:
+        # worker crash = first-class failure event: flip NOW, not at the
+        # 20-min deadline (same rule as the llamaparse worker)
+        logging.exception("pdf job %s: local worker crashed", job_id)
+        job["status"] = "failed"
+        job["error"] = f"worker crashed: {type(e).__name__}: {e}"
+        try:
+            _save_job(job)
+        except Exception:
+            pass
     finally:
         _local_slots.release()
         _cleanup_pdf(pdf_path)
@@ -775,6 +894,8 @@ def _job_snapshot(job: dict) -> dict:
         0, int(JOB_TTL_S - (time.time() - job.get("created_ts", 0))))
     if job.get("status") == "failed":
         out["error"] = job.get("error", "")
+    if job.get("status") == "cancelled":
+        out["error"] = "cancelled by client"
     if job.get("status") == "done":
         if job.get("markdown_url"):
             out["markdown_url"] = job["markdown_url"]
@@ -827,7 +948,7 @@ async def pdf_job_events(job_id: str, token: str = Depends(verify_token)):
             if status != last:
                 yield sse("status", _job_snapshot(current))
                 last = status
-                if status in ("done", "failed"):
+                if status in ("done", "failed", "cancelled"):
                     return
             now = time.monotonic()
             if now - last_beat >= 15.0:  # proxy keep-alive comment
@@ -843,6 +964,41 @@ async def pdf_job_events(job_id: str, token: str = Depends(verify_token)):
     return StreamingResponse(
         stream(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.delete("/jobs/{job_id}", tags=["PDF"],
+               summary="Cancel a job or purge its result",
+               description=(
+                   "Client abort:\n"
+                   "- queued/running → status 'cancelled': workers discard the "
+                   "job at their next checkpoint (before starting, or after "
+                   "converting — results are never saved). A conversion "
+                   "already in flight finishes CPU-bounded, its result is "
+                   "dropped.\n"
+                   "- done/failed → the job file is purged immediately "
+                   "(manual TTL eviction — for results you will NOT pick "
+                   "up, instead of waiting out the 2h TTL)."),
+               responses={
+                200: {"description": "cancelled / purged — body carries the "
+                                     "resulting status"},
+                404: {"description": "Unknown or expired job"},
+            })
+def pdf_job_delete(job_id: str, token: str = Depends(verify_token)):
+    _purge_jobs()
+    job = _load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Unknown or expired job")
+    status = job.get("status")
+    if status in ("queued", "running"):
+        job["status"] = "cancelled"
+        _save_job(job)  # workers see it at their next checkpoint and discard
+        return {"job_id": job_id, "status": "cancelled",
+                "note": "workers discard this job at their next checkpoint"}
+    # terminal (done/failed/cancelled): purge now — manual TTL eviction
+    _cleanup_pdf(job["_path"][:-5] + ".pdf")
+    os.unlink(job["_path"])
+    return {"job_id": job_id, "status": "purged",
+            "note": "result deleted before its TTL expired"}
 
 
 @router.get("/jobs/{job_id}", tags=["PDF"],

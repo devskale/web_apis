@@ -168,10 +168,14 @@ def test_throway_disabled_503(monkeypatch):
 
 def test_reader_kills_overdue_job():
     """A hung worker (job stuck in running past its deadline) is flipped to
-    failed by the next status read - no zombie state survives a poll."""
+    failed by the next status read - no zombie state survives a poll.
+    created_ts must be AFTER this process's boot: a pre-boot job would be
+    caught by the orphan sweep first (both kills are correct, but this test
+    pins the deadline one)."""
     import time as _t
     jid = "overduejob123"
-    job = {"job_id": jid, "status": "running", "created_ts": _t.time() - 9999,
+    job = {"job_id": jid, "status": "running",
+           "created_ts": pdf_router._PROCESS_START + 1,
            "created_at": "x", "deadline_ts": _t.time() - 900, "pages": 5,
            "_path": pdf_router._job_path(jid)}
     pdf_router._save_job(job)

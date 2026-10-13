@@ -152,6 +152,13 @@ Offen als Folge-Themen (nicht Teil dieses Fixes):
   Retry+Backoff, saved Configs per ID) bleiben die Option für BATCH-
   Verarbeitung — dort ersetzen sie N× Polling wirklich.
 - **doc2md** (Office-Docs + Images): eigenes Issue/Skill.
+- **Hardening (2026-10-13, Nachmittags-Session) — GEBAUT**: Orphan-Sweep
+  (Boot-Visibility-Timeout), Worker-Catch-All (Crash → sofort failed;
+  enthüllte die `.tmp`-Purge-Race, jetzt gefixt), `DELETE /pdf/jobs/{id}`
+  (Cancel + manuelle TTL-Purge), Queue-Cap nur aktive Jobs, LlamaParse
+  1×-Retry-Policy (retryable vs. permanent). Bewusst geskippt: Idempotency-
+  Keys (kein Client retried Submits), cancel_on_disconnect-Watcher für SSE
+  (Stream hält keine Ressourcen; uvicorn cancelt den Generator).
 
 ## 8. Workaround (historisch, vor dem Fix)
 
