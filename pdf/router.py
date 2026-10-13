@@ -213,7 +213,11 @@ def _run_llama_job(job_id: str, pdf_path: str, filename: str, tier: str,
             return
         try:
             markdown = _llamaparse_to_markdown(
-                data, filename, tier, language)
+                data, filename, tier, language,
+                poll_budget_s=max(
+                    LLAMA_POLL_TIMEOUT_S,
+                    min(job["deadline_ts"] - time.time(), JOB_DEADLINE_S)
+                    - 30.0))  # 30s margin: upload + result fetch + transfer
         except Exception as e:
             job["status"] = "failed"
             job["error"] = f"{type(e).__name__}: {e}"
@@ -312,11 +316,18 @@ def _llamaparse_to_markdown(
     tier: str,
     language: str,
     client: httpx.Client | None = None,
+    poll_budget_s: float | None = None,
 ) -> str:
     """Upload to LlamaParse, poll the job, return the full markdown.
 
     v2 API: POST /parse/upload -> GET /parse/{id} (poll) -> expand=markdown_full.
+    poll_budget_s: how long the LlamaParse job may take. Defaults to
+    LLAMA_POLL_TIMEOUT_S (100s — the sync path must stay under gunicorn's
+    120s kill). The async job worker passes its remaining job deadline:
+    big scans (~2s/page) legitimately need minutes, and the 20-min job
+    deadline — not the sync budget — is their cap (issue 2026-10-13).
     """
+    budget = poll_budget_s if poll_budget_s is not None else LLAMA_POLL_TIMEOUT_S
     headers = {"Authorization": f"Bearer {_llama_api_key()}"}
     config: dict = {
         "tier": tier,
@@ -356,7 +367,7 @@ def _llamaparse_to_markdown(
             raise HTTPException(
                 status_code=502, detail="LlamaParse returned no job id.")
 
-        deadline = time.monotonic() + LLAMA_POLL_TIMEOUT_S
+        deadline = time.monotonic() + budget
         while True:
             time.sleep(_LLAMA_POLL_INTERVAL_S)
             check = client.get(
@@ -502,20 +513,43 @@ def pdf_to_md(
         proc = ctx.Process(
             target=_convert_local, args=(data, method, out_q), daemon=True)
         proc.start()
-        proc.join(PDF_CONVERT_TIMEOUT_S)
-        if proc.is_alive():
+        # DRAIN BEFORE JOIN (issue 2026-10-13): the pipe behind mp.Queue
+        # buffers ~64KB; a bigger result blocks the child's feeder thread at
+        # exit while the parent sits in join() — the documented
+        # multiprocessing deadlock. Results >64KB (≈ >45 text pages) used to
+        # hit the watchdog with the finished work discarded. Poll the queue
+        # with 1s ticks so a crashed child (no result, process dead) fails
+        # fast with 500 instead of waiting out the whole watchdog as 504.
+        result = None
+        deadline = time.monotonic() + PDF_CONVERT_TIMEOUT_S
+        while result is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                result = out_q.get(timeout=min(remaining, 1.0))
+            except queue_mod.Empty:
+                if not proc.is_alive():
+                    proc.join()  # zombie safety: reap before raising
+                    logging.error("pdf/to_md: %s child exited without result",
+                                  method)
+                    raise HTTPException(
+                        status_code=500, detail="PDF processing failed.")
+        if result is None:
+            # still alive, no result at the deadline -> pathological PDF
             proc.kill()
             proc.join()
             logging.error("pdf/to_md: %s child killed after %ss (likely "
                           "pathological PDF)", method, PDF_CONVERT_TIMEOUT_S)
             raise HTTPException(
                 status_code=504, detail="PDF processing timed out.")
-        try:
-            status, payload = out_q.get_nowait()
-        except queue_mod.Empty:
-            logging.error("pdf/to_md: %s child exited without result", method)
-            raise HTTPException(
-                status_code=500, detail="PDF processing failed.")
+        status, payload = result
+        # The feeder has flushed (get returned); join is safe now and never
+        # deadlocks. Belt-and-braces: kill rather than leak a stray child.
+        proc.join(PDF_CONVERT_TIMEOUT_S)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
         # The child just released its buffers; reclaim promptly (small box).
         gc.collect()
         if status == "error":

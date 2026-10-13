@@ -26,7 +26,7 @@ def _fast(monkeypatch):
     monkeypatch.setattr(pdf_router, "_LLAMA_POLL_INTERVAL_S", 0)
     monkeypatch.setattr(pdf_router, "_llama_api_key", lambda: "llx-test")
     monkeypatch.setattr(pdf_router, "_llamaparse_to_markdown",
-                        lambda data, fn, tier, lang: "# converted")
+                        lambda data, fn, tier, lang, **kw: "# converted")
     # Leichen aus früheren Läufen dürfen einen 429 (MAX_JOBS zählt
     # queued+running+done) nie auslösen — der Deckel gilt pro Test.
     monkeypatch.setattr(pdf_router, "MAX_JOBS", 10_000)
@@ -129,7 +129,7 @@ def test_throway_transfer_drops_markdown(monkeypatch):
 
 
 def test_failed_job_reports_error(monkeypatch):
-    def boom(data, fn, tier, lang):
+    def boom(data, fn, tier, lang, **kw):
         raise RuntimeError("upstream down")
     monkeypatch.setattr(pdf_router, "_llamaparse_to_markdown", boom)
     r = client.post("/pdf/to_md?method=llamaparse&wait=false", headers=TOKEN,
@@ -201,3 +201,28 @@ def test_no_payload_files_left_after_done():
     assert done["status"] == "done"
     leftovers = [n for n in os.listdir(pdf_router.JOBS_DIR) if n.endswith(".pdf")]
     assert leftovers == []
+
+
+# ── poll_budget_s (issue 2026-10-13): große Scans brauchen im Job-Worker mehr
+# als das Sync-Budget von 100s (gunicorn-Kill), aber weniger als die Job-
+# Deadline. Der Worker muss sein Restbudget durchreichen, der Sync-Pfad
+# bleibt bei 100s.
+
+def test_job_worker_passes_extended_poll_budget(monkeypatch):
+    """Async-Job: Budget > 100s (Rest-Deadline, 30s Marge, min. Sync-Norm)."""
+    captured = {}
+
+    def fake_llama(data, filename, tier, language, client=None,
+                   poll_budget_s=None):
+        captured["budget"] = poll_budget_s
+        return "# big scan"
+
+    monkeypatch.setattr(pdf_router, "_llamaparse_to_markdown", fake_llama)
+    r = client.post("/pdf/to_md?method=llamaparse&wait=false", headers=TOKEN,
+                    files={"file": ("scan.pdf", _pdf(80), "application/pdf")})
+    assert r.status_code == 202
+    body = _wait_done(r.json()["job_id"])
+    assert body["status"] == "done", body
+    # volle Job-Deadline (20 min) - 30s Marge, kein 100s-Deckel mehr
+    assert captured["budget"] > pdf_router.LLAMA_POLL_TIMEOUT_S, captured
+    assert captured["budget"] <= pdf_router.JOB_DEADLINE_S, captured
