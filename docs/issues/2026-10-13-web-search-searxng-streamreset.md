@@ -1,6 +1,8 @@
 # Issue: `web-search`-Skill schlägt fehl mit h2 `StreamReset` — öffentliche SearXNG-Instanzen
 
-**Status:** offen (Diagnose abgeschlossen, Fix-Vorschlag steht)
+**Status:** ✅ behoben (web-search 2.4.0, skale-skills) — Konfiguration machte
+Duck bereits zum Default; jetzt zusätzlich Client-Fallback Duck→SearXNG und
+origin-labelierte Fehlermeldungen
 **Schwere:** mittel — betrifft nur den `web-search`-Skill, nicht die API
 **Aufgetreten:** 2026-10-13, pi-Session (`web-search "process reward model …"`)
 **Reporter:** Session-Diagnose (unii/uniinfer-Kontext)
@@ -75,6 +77,16 @@ SearXNG-Instanzen. Das eliminiert die gesamte Klasse
    geführt. Der Absender gehört in die Message.
 
 ## 6. Workaround (sofort wirksam)
+
+> **Lösung (2026-10-13, web-search 2.4.0):** Die offenen Punkte aus §5 sind
+> geklärt — (1) Duck ist der Default, sobald `WEB_SEARCH_BEARER` +
+> `DUCK_API_URL` in credgoo liegen (war zum Vorfall-Zeitpunkt nicht
+> aufgelöst); fällt die Duck API selbst aus, versucht der Skill jetzt einmal
+> SearXNG (private Instanz zuerst, öffentliche als letzte Not) und meldet
+> BEIDE Fehler mit Ursprungs-Label. (2) Instanz-Rotation entfällt — der
+> Pfad wird nur noch als letzter Fallback erreicht. (3) „tu error" war nie
+> im Skill — das Label kam aus dem Session-Kontext; der Skill labeliert
+> jetzt jeden Fehler mit seinem Absender (`Duck API …` / `SearXNG …`).
 
 Solange kein Fix landet: `web-search`-Aufrufe mit Geduld wiederholen — der
 Fehler ist transient (nicht jeder Request trifft eine überlastete Instanz).
