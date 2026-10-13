@@ -50,12 +50,15 @@ def test_pdfplumber_small_pdf_still_works():
     assert "lorem ipsum" in body["markdown"]
 
 
-def test_pdfplumber_large_result_no_deadlock():
-    """Ergebnis deutlich >64KB: muss konvertieren, nicht am Watchdog sterben.
+def test_pdfplumber_large_result_no_deadlock(monkeypatch):
+    """Regression Deadlock-Fix: Ergebnis deutlich >64KB im SYNC-Pfad.
 
-    Vor dem Fix: 504 nach PDF_CONVERT_TIMEOUT_S (60s) — der Test lief in den
-    Timeout. Nach dem Fix: 200 mit dem vollständigen Text in wenigen Sekunden.
+    Vor dem Fix: join vor Queue-Drain -> mp.Queue-Deadlock, 504 nach 60s,
+    fertige Arbeit verworfen. PDF_LOCAL_ASYNC_PAGES wird hochgepatcht, damit
+    die 50 Seiten synchron laufen und wirklich den Sync-Pfad testen.
     """
+    import pdf.router as pdf_router
+    monkeypatch.setattr(pdf_router, "PDF_LOCAL_ASYNC_PAGES", 10_000)
     pdf_bytes = _text_pdf(_PAGES, _CHARS_PER_PAGE)
     r = client.post(
         "/pdf/to_md?method=pdfplumber", headers=TOKEN,
@@ -71,7 +74,38 @@ def test_pdfplumber_large_result_no_deadlock():
     assert "Seite 1" in body["markdown"]
 
 
-@pytest.mark.parametrize("pages,chars", [(1, 100), (_PAGES, _CHARS_PER_PAGE)])
+def test_pdfplumber_auto_async_beyond_threshold():
+    """>PDF_LOCAL_ASYNC_PAGES (30): 202 + Job, der durchläuft (issue
+    2026-10-13: amd schafft ~0.5-0.8s/page — große Docs passen nicht in den
+    60s-Sync-Watchdog und müssen als Job laufen, ohne gunicorn-Budget)."""
+    import time
+
+    import pdf.router as pdf_router
+    pdf_bytes = _text_pdf(35, 2000)
+    r = client.post(
+        "/pdf/to_md?method=pdfplumber", headers=TOKEN,
+        files={"file": ("big.pdf", pdf_bytes, "application/pdf")})
+    assert r.status_code == 202, r.text
+    queued = r.json()
+    assert queued["status"] == "queued"
+    assert queued["auto_async"] is True
+    assert queued["pages"] == 35
+
+    deadline = time.time() + 60
+    body = None
+    while time.time() < deadline:
+        body = client.get(f"/pdf/jobs/{queued['job_id']}",
+                          headers=TOKEN).json()
+        if body["status"] in ("done", "failed"):
+            break
+        time.sleep(0.2)
+    assert body is not None and body["status"] == "done", body
+    assert body["pages"] == 35
+    assert "Seite 35" in body["markdown"]
+    assert body["chars"] > 64 * 1024
+
+
+@pytest.mark.parametrize("pages,chars", [(1, 100), (20, 100)])
 def test_no_zombie_children_left(pages, chars):
     """Zombie-Sicherheit: nach der Konvertierung lebt kein Child mehr."""
     import multiprocessing as mp

@@ -33,7 +33,11 @@ PDF_CONVERT_TIMEOUT_S = 60
 # Coarse VA backstop for the child (MuPDF maps a lot of address space; the
 # old 200MB killed even trivial conversions). Real RSS guard is the service
 # cgroup MemoryMax (400M) — amd has ~1GB total RAM.
-PDF_CHILD_RLIMIT_AS = 1024 * 1024 * 1024
+# 2GB, not 1GB: pdfminer never touches 2GB of VA, but it RUNS INTO a 1GB
+# cap — malloc fights the limit and the same child takes 3.4× longer
+# (measured 2026-10-13: 60 pages 106.6s @1GB vs 31.6s @2GB, same spawn
+# context). The cap is a bomb guard, not a budget — keep it out of the way.
+PDF_CHILD_RLIMIT_AS = 2 * 1024 * 1024 * 1024
 
 LLAMA_PARSE_BASE = "https://api.cloud.llamaindex.ai"
 # Polling budget must stay under the 120s gunicorn worker timeout.
@@ -41,16 +45,24 @@ LLAMA_POLL_TIMEOUT_S = 100
 _LLAMA_POLL_INTERVAL_S = 3
 LLAMA_TIERS = ("fast", "cost_effective", "agentic", "agentic_plus")
 
-# ── Async jobs (llamaparse only) ──
+# ── Async jobs (pdfplumber-local and llamaparse) ──
 # amd is a ~1GB box: ONE llamaparse job at a time, a small queue, and results
 # that leave memory as soon as they are transferred to throway.
 # Job state lives in JSON FILES under data/pdf_jobs/, not in memory: gunicorn
 # runs 2 workers and polls must round-trip between them. Files also make jobs
 # survive restarts and keep big markdown strings off the heap until requested.
 PDF_ASYNC_PAGES = 40          # llamaparse beyond this is auto-async (~2s/page)
+# pdfplumber beyond this is auto-async too: amd converts ~0.5-0.8s/page, and
+# the sync path must survive spawn-import + conversion inside the 60s child
+# watchdog (which in turn must stay under gunicorn's 120s). 30 pages ≈ 25s
+# worst case — margin, not optimism (issue 2026-10-13).
+PDF_LOCAL_ASYNC_PAGES = 30
+# Watchdog for the local child inside an async job: the worker thread has no
+# gunicorn budget, the job deadline is the real cap. Floor at the sync value.
 JOB_TTL_S = 2 * 3600          # done/failed jobs are evicted after 2h
 MAX_JOBS = 10                 # queued+running+done; beyond -> 429
 LLAMA_JOB_SLOTS = 1           # concurrent llamaparse conversions
+LOCAL_JOB_SLOTS = 1           # concurrent local (pdfplumber) conversions — CPU-bound
 THROWAY_URL = "https://skale.dev/throway/"
 THROWAY_TTL_S = 14400         # 4h, per throway contract
 THROWAY_TIMEOUT_S = 60
@@ -74,6 +86,7 @@ os.makedirs(JOBS_DIR, exist_ok=True)
 _JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
 _llama_slots = threading.BoundedSemaphore(LLAMA_JOB_SLOTS)
+_local_slots = threading.BoundedSemaphore(LOCAL_JOB_SLOTS)
 # Live job worker threads, kept in a registry so tests can join them before
 # wiping shared state (JOBS_DIR) and prod can avoid zombie daemons on shutdown.
 _job_threads: list[threading.Thread] = []
@@ -277,6 +290,179 @@ def _convert_local(data: bytes, method: str, out_q) -> None:
         out_q.put(("error", f"{type(e).__name__}: {e}"))
 
 
+def _run_pdfplumber_child(data: bytes, timeout_s: float) -> str:
+    """Spawn the pdfplumber child, drain its queue, return the markdown.
+
+    Zombie-safe in every path (issue 2026-10-13): the queue is drained BEFORE
+    joining — mp.Queue pipes buffer ~64KB, and a bigger result deadlocks the
+    child's feeder thread while the parent sits in join() (the documented
+    multiprocessing deadlock; results >64KB used to die at the watchdog with
+    the finished work discarded). 1s poll ticks make a crashed child fail
+    fast with 500 instead of waiting out the whole budget as a 504.
+
+    timeout_s is the child watchdog: 60s sync (under gunicorn's 120s kill);
+    async jobs pass their remaining deadline budget.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    out_q = ctx.Queue()
+    proc = ctx.Process(
+        target=_convert_local, args=(data, "pdfplumber", out_q), daemon=True)
+    proc.start()
+    result = None
+    deadline = time.monotonic() + timeout_s
+    while result is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            result = out_q.get(timeout=min(remaining, 1.0))
+        except queue_mod.Empty:
+            if not proc.is_alive():
+                proc.join()
+                logging.error(
+                    "pdf/to_md: pdfplumber child exited without result")
+                raise HTTPException(
+                    status_code=500, detail="PDF processing failed.")
+    if result is None:
+        proc.kill()
+        proc.join()
+        logging.error("pdf/to_md: pdfplumber child killed after %.0fs "
+                      "(likely pathological PDF)", timeout_s)
+        raise HTTPException(
+            status_code=504, detail="PDF processing timed out.")
+    status, payload = result
+    # The feeder has flushed (get returned) — join cannot deadlock anymore.
+    proc.join(5.0)
+    if proc.is_alive():  # belt-and-braces: never leak a stray child
+        proc.kill()
+        proc.join()
+    gc.collect()
+    if status == "error":
+        logging.error("pdf/to_md failed (pdfplumber): %s", payload)
+        raise HTTPException(status_code=500, detail="PDF processing failed.")
+    return payload
+
+
+def _create_async_job(page_count: int, method: str, filename: str,
+                       data: bytes, extra: dict) -> tuple:
+    """Shared async-job creation: state file, disk spill, RAM discipline.
+
+    Returns (job, pdf_path); the caller spawns its worker thread. Raises 429
+    when the queue is full.
+    """
+    _purge_jobs()
+    if _count_jobs() >= MAX_JOBS:
+        raise HTTPException(
+            status_code=429, headers={"Retry-After": "60"},
+            detail="Too many jobs queued; retry later.")
+    job_id = secrets.token_urlsafe(12)
+    job = {
+        "job_id": job_id, "status": "queued",
+        "created_ts": time.time(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "deadline_ts": time.time() + JOB_DEADLINE_S,
+        "pages": page_count, "method": method,
+        "_path": _job_path(job_id),
+    }
+    job.update(extra)
+    _save_job(job)
+    # RAM: spill the upload payload to disk - queued jobs cost zero heap;
+    # the worker reads it only while holding the slot.
+    pdf_path = job["_path"][:-5] + ".pdf"
+    with open(pdf_path, "wb") as fh:
+        fh.write(data)
+    return job, pdf_path
+
+
+def _start_job_thread(worker, args) -> None:
+    """Register + start a job worker daemon thread (shared housekeeping)."""
+    thread = threading.Thread(target=worker, args=args, daemon=True)
+    with _job_threads_lock:
+        _job_threads[:] = [t for t in _job_threads if t.is_alive()]
+        _job_threads.append(thread)
+    thread.start()
+
+
+def _run_local_job(job_id: str, pdf_path: str, filename: str,
+                   transfer: str) -> None:
+    """Background worker for async pdfplumber jobs (issue 2026-10-13).
+
+    amd converts ~0.5-0.8s/page — documents beyond PDF_LOCAL_ASYNC_PAGES
+    cannot fit the 60s sync watchdog (which must stay under gunicorn's 120s).
+    Same RAM/deadline discipline as the llamaparse worker: payload on disk
+    while queued, one CPU slot, hard deadline enforced at every stage.
+    """
+    job = _load_job(job_id)
+    if job is None:
+        _cleanup_pdf(pdf_path)
+        return
+    acquired = False
+    while not _deadline_hit(job):
+        if _local_slots.acquire(timeout=5):
+            acquired = True
+            break
+    if not acquired:
+        _cleanup_pdf(pdf_path)
+        job["status"] = "failed"
+        job["error"] = "auto-killed: queued too long (deadline exceeded)"
+        _save_job(job)
+        return
+    data = None
+    try:
+        if _deadline_hit(job):
+            job["status"] = "failed"
+            job["error"] = "auto-killed: deadline exceeded before conversion"
+            _save_job(job)
+            return
+        job["status"] = "running"
+        _save_job(job)
+        try:
+            with open(pdf_path, "rb") as fh:
+                data = fh.read()
+        except OSError as e:
+            job["status"] = "failed"
+            job["error"] = f"OSError: {e}"
+            _save_job(job)
+            return
+        # No gunicorn budget in a worker thread: the job deadline (minus
+        # margin, floored at the sync watchdog) is the child's real cap.
+        budget = max(
+            float(PDF_CONVERT_TIMEOUT_S),
+            min(job["deadline_ts"] - time.time(), JOB_DEADLINE_S) - 30.0)
+        try:
+            markdown = _run_pdfplumber_child(data, budget)
+        except HTTPException as e:
+            job["status"] = "failed"
+            job["error"] = f"conversion failed: {e.detail}"
+            _save_job(job)
+            return
+        del data
+        gc.collect()
+        if _deadline_hit(job):
+            job["status"] = "failed"
+            job["error"] = "auto-killed: deadline exceeded after conversion"
+            _save_job(job)
+            return
+        job["chars"] = len(markdown)
+        if transfer == "throway":
+            try:
+                job["markdown_url"] = _throway_upload(markdown, filename)
+                job["transfer"] = "throway"
+                markdown = ""
+            except Exception as e:
+                logging.error("throway upload failed for job %s: %s", job_id, e)
+                job["transfer_error"] = f"{type(e).__name__}: {e}"
+        job["markdown"] = markdown
+        job["status"] = "done"
+        _save_job(job)
+        del markdown
+    finally:
+        _local_slots.release()
+        _cleanup_pdf(pdf_path)
+        data = None
+        gc.collect()
+
+
 def _public_base(request: Request) -> str:
     """Public base URL (behind nginx the worker doesn't honor proxy headers
     for base_url, so reconstruct it from forwarded headers + root_path)."""
@@ -419,9 +605,9 @@ def _llamaparse_to_markdown(
         "handles OCR and complex layouts; the document is uploaded to LlamaCloud). "
         "Limits: 10MB and 500 pages. Scanned PDFs without OCR will not yield text "
         "with the local converter. Returns markdown content and statistics. "
-        " llamaparse documents beyond ~40 pages are converted as async jobs "
-        " automatically: the response is then 202 with a job_id - poll "
-        " GET /pdf/jobs/{job_id} until done/failed."),
+        " Documents beyond ~30 pages (pdfplumber) / ~40 pages (llamaparse) are "
+        "converted as async jobs automatically: the response is then 202 with a "
+        "job_id - poll GET /pdf/jobs/{job_id} until done/failed."),
     responses={
         202: {
             "description": "Async job accepted (wait=false or llamaparse document "
@@ -457,8 +643,9 @@ def pdf_to_md(
         description="OCR language hint (ISO code); only used with method=llamaparse."),
     wait: bool = Query(
         True,
-        description="llamaparse only: false returns 202 + job_id immediately; "
-                    "poll /pdf/jobs/{job_id}. Forced for documents beyond ~40 pages."),
+        description="false returns 202 + job_id immediately (forces async for "
+                    "both converters); poll /pdf/jobs/{job_id}. Forced "
+                    "automatically beyond ~30 (pdfplumber) / ~40 (llamaparse) pages."),
     transfer: Literal["inline", "throway"] = Query(
         "inline",
         description="throway: result is uploaded to skale.dev/throway (4h TTL) and "
@@ -503,99 +690,42 @@ def pdf_to_md(
             status_code=503, detail="throway transfer is disabled on this deployment.")
 
     if method == "pdfplumber":
-        # Watchdog: the conversion runs in a killable child. A pathological
-        # PDF (decompression bomb, huge stream) gets 504 at the deadline
-        # instead of tying the worker up until gunicorn's 120s kill.
-        # spawn (not fork): forking from a request thread of a threaded
-        # worker inherits held locks and deadlocks the child.
-        ctx = multiprocessing.get_context("spawn")
-        out_q = ctx.Queue()
-        proc = ctx.Process(
-            target=_convert_local, args=(data, method, out_q), daemon=True)
-        proc.start()
-        # DRAIN BEFORE JOIN (issue 2026-10-13): the pipe behind mp.Queue
-        # buffers ~64KB; a bigger result blocks the child's feeder thread at
-        # exit while the parent sits in join() — the documented
-        # multiprocessing deadlock. Results >64KB (≈ >45 text pages) used to
-        # hit the watchdog with the finished work discarded. Poll the queue
-        # with 1s ticks so a crashed child (no result, process dead) fails
-        # fast with 500 instead of waiting out the whole watchdog as 504.
-        result = None
-        deadline = time.monotonic() + PDF_CONVERT_TIMEOUT_S
-        while result is None:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            try:
-                result = out_q.get(timeout=min(remaining, 1.0))
-            except queue_mod.Empty:
-                if not proc.is_alive():
-                    proc.join()  # zombie safety: reap before raising
-                    logging.error("pdf/to_md: %s child exited without result",
-                                  method)
-                    raise HTTPException(
-                        status_code=500, detail="PDF processing failed.")
-        if result is None:
-            # still alive, no result at the deadline -> pathological PDF
-            proc.kill()
-            proc.join()
-            logging.error("pdf/to_md: %s child killed after %ss (likely "
-                          "pathological PDF)", method, PDF_CONVERT_TIMEOUT_S)
-            raise HTTPException(
-                status_code=504, detail="PDF processing timed out.")
-        status, payload = result
-        # The feeder has flushed (get returned); join is safe now and never
-        # deadlocks. Belt-and-braces: kill rather than leak a stray child.
-        proc.join(PDF_CONVERT_TIMEOUT_S)
-        if proc.is_alive():
-            proc.kill()
-            proc.join()
-        # The child just released its buffers; reclaim promptly (small box).
-        gc.collect()
-        if status == "error":
-            logging.error("pdf/to_md failed (%s): %s", method, payload)
-            raise HTTPException(
-                status_code=500, detail="PDF processing failed.")
-        markdown = payload
+        # Beyond PDF_LOCAL_ASYNC_PAGES the conversion cannot fit the 60s
+        # child watchdog on this box (~0.5-0.8s/page + spawn import), and the
+        # watchdog must stay under gunicorn's 120s kill. Route to an async
+        # job instead — the client polls /pdf/jobs/{id} (same flow as
+        # llamaparse). Small documents stay synchronous (fast path).
+        if page_count > PDF_LOCAL_ASYNC_PAGES or not wait:
+            job, pdf_path = _create_async_job(
+                page_count, "pdfplumber", filename, data, {})
+            del data
+            gc.collect()
+            _start_job_thread(
+                _run_local_job, (job["job_id"], pdf_path, filename, transfer))
+            return JSONResponse(status_code=202, content={
+                "job_id": job["job_id"], "status": "queued",
+                "pages": page_count,
+                "poll": _public_base(request) + f"/pdf/jobs/{job['job_id']}",
+                "auto_async": page_count > PDF_LOCAL_ASYNC_PAGES,
+            })
+        markdown = _run_pdfplumber_child(data, PDF_CONVERT_TIMEOUT_S)
 
     elif method == "llamaparse":
         # Cloud parsing: the document leaves this server (LlamaCloud, US).
         # Long documents must run as a background job: the sync request would
         # die at gunicorn's 120s timeout (~2s/page measured).
         if page_count > PDF_ASYNC_PAGES or not wait:
-            _purge_jobs()
-            if _count_jobs() >= MAX_JOBS:
-                raise HTTPException(
-                    status_code=429, headers={"Retry-After": "60"},
-                    detail="Too many jobs queued; retry later.")
-            job_id = secrets.token_urlsafe(12)
-            job = {
-                "job_id": job_id, "status": "queued",
-                "created_ts": time.time(),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "deadline_ts": time.time() + JOB_DEADLINE_S,
-                "pages": page_count, "method": "llamaparse", "tier": tier,
-                "_path": _job_path(job_id),
-            }
-            _save_job(job)
-            # RAM: spill the upload payload to disk - queued jobs cost zero
-            # heap; the worker reads it only while holding the slot.
-            pdf_path = job["_path"][:-5] + ".pdf"
-            with open(pdf_path, "wb") as fh:
-                fh.write(data)
+            job, pdf_path = _create_async_job(
+                page_count, "llamaparse", filename, data,
+                {"tier": tier})
             del data
             gc.collect()
-            worker = threading.Thread(
-                target=_run_llama_job,
-                args=(job_id, pdf_path, filename, tier, language, transfer),
-                daemon=True)
-            with _job_threads_lock:
-                _job_threads[:] = [t for t in _job_threads if t.is_alive()]
-                _job_threads.append(worker)
-            worker.start()
+            _start_job_thread(
+                _run_llama_job,
+                (job["job_id"], pdf_path, filename, tier, language, transfer))
             return JSONResponse(status_code=202, content={
-                "job_id": job_id, "status": "queued", "pages": page_count,
-                "poll": _public_base(request) + f"/pdf/jobs/{job_id}",
+                "job_id": job["job_id"], "status": "queued", "pages": page_count,
+                "poll": _public_base(request) + f"/pdf/jobs/{job['job_id']}",
                 "auto_async": page_count > PDF_ASYNC_PAGES,
             })
         markdown = _llamaparse_to_markdown(data, filename, tier, language)
