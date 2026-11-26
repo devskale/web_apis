@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 
 [[package]]
@@ -291,8 +291,8 @@ wheels = [
 
 [[package]]
 name = "credgoo"
-version = "0.1.14"
-source = { git = "https://github.com/devskale/python-openutils.git?subdirectory=packages%2Fcredgoo&rev=main#ba0033b2b24a71e619e0913d506b12cd18812423" }
+version = "0.1.20"
+source = { git = "https://github.com/devskale/python-openutils.git?subdirectory=packages%2Fcredgoo&rev=main#d0f387df6e422648eee2d6fa44d63567dbe6de20" }
 dependencies = [
     { name = "requests" },
 ]
